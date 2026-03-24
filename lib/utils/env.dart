@@ -3,7 +3,7 @@ import 'package:envied/envied.dart';
 
 part 'env.g.dart';
 
-@Envied(path: 'lib/.env')
+@Envied(path: '.env')
 abstract class Env {
   // Deezer
   @EnviedField(varName: 'deezerClientId', obfuscate: true)

@@ -116,7 +116,7 @@ dependencies:
     path: ./scrobblenaut
   share_plus: ^11.0.0
   spotify: ^0.13.1
-  sqflite: ^2.3.0
+  sqflite: 2.2.8+4
   url_launcher: ^6.2.2
   #version: ^3.0.2 Added contents in source directly for compatibility
   visibility_detector: ^0.4.0+2
@@ -204,3 +204,4 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/custom-fonts/#from-packages
+
