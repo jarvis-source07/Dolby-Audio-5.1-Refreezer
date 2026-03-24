@@ -1,7 +1,7 @@
 #Key stuff
 key.properties
-**/*.keystore
-**/*.jks
+**/.keystore
+**/.jks
 android/key.properties
 
 android/local.properties
@@ -16,7 +16,8 @@ android/.idea
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# Miscellaneous
+Miscellaneous
+
 *.class
 *.log
 *.pyc
@@ -27,7 +28,8 @@ android/.idea
 .history
 .svn/
 
-# IntelliJ related
+IntelliJ related
+
 *.iml
 *.ipr
 *.iws
@@ -35,42 +37,8 @@ android/.idea
 android/.idea/
 android/local.properties
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-.vscode/
-
-android/app/.cxx
-
-# Flutter/Dart/Pub related
-**/doc/api/
+flutter/
+build/
 .dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
 .packages
-.pub-cache/
-.pub/
-/build/
-coverage/
 pubspec.lock
-devtools_options.yaml
-
-# Web related
-lib/generated_plugin_registrant.dart
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Exceptions to above rules.
-!/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
-
-# Envied
-.env
-lib/utils/env.g.dart
-
-# Possible translations remnants
-translations/refreezer.zip
-translations/ReFreezer (translations).zip
