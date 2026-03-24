@@ -1,58 +1,55 @@
 allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' }
-    }
+repositories {
+google()
+mavenCentral()
+maven { url 'https://jitpack.io' }
+}
 }
 
 rootProject.layout.buildDirectory = rootProject.layout.projectDirectory.dir('../build')
+
 subprojects {
-    project.layout.buildDirectory = rootProject.layout.buildDirectory.dir(project.name)
+project.layout.buildDirectory = rootProject.layout.buildDirectory.dir(project.name)
 
-    // This will make sure all the sub projects have an android namespace,
-    // if not it will read it from AndroidManifest.xml
-    // Also sets the compileSdk to 35 and the target javaVersion to 17 
-    // (needs to be changed manually to the latest in the future)
-    afterEvaluate {
-        // check if android block is available
-        if (it.hasProperty('android')) {
+afterEvaluate {
+    if (it.hasProperty('android')) {
 
-            if (it.android.namespace == null) {
-                def manifest = groovy.xml.XmlSlurper.parse(file(it.android.sourceSets.main.manifest.srcFile))
-                def packageName = manifest.@package.text()
-                println("Setting ${packageName} as android namespace")
-                it.android {
-                    namespace = packageName
-                }
+        if (it.android.namespace == null) {
+            def manifest = groovy.xml.XmlSlurper.parse(file(it.android.sourceSets.main.manifest.srcFile))
+            def packageName = manifest.@package.text()
+            it.android {
+                namespace = packageName
+            }
+        }
+
+        def javaVersion = JavaVersion.VERSION_17
+        def androidApiVersion = 34
+
+        it.android {
+            compileSdk androidApiVersion
+
+            defaultConfig {
+                targetSdk androidApiVersion
             }
 
-            def javaVersion = JavaVersion.VERSION_17
-            android {
-                def androidApiVersion = 35
-                compileSdk androidApiVersion
-                defaultConfig {
-                    targetSdk androidApiVersion
-                }
-                compileOptions {
-                    sourceCompatibility javaVersion
-                    targetCompatibility javaVersion
-                }
-                tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                    kotlinOptions {
-                        jvmTarget = javaVersion.toString()
-                    }
-                }
-                println("Setting java version to ${javaVersion.toString()} which is $javaVersion")
-                println("Setting compileSdk and targetSdk to $androidApiVersion")
+            compileOptions {
+                sourceCompatibility javaVersion
+                targetCompatibility javaVersion
+            }
+
+            kotlinOptions {
+                jvmTarget = "17"
             }
         }
     }
 }
+
+}
+
 subprojects {
-    project.evaluationDependsOn(':app')
+project.evaluationDependsOn(':app')
 }
 
 tasks.register("clean", Delete) {
-    delete rootProject.layout.buildDirectory
+delete rootProject.layout.buildDirectory
 }
