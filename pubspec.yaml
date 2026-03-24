@@ -128,7 +128,7 @@ dev_dependencies:
 
   json_serializable: ^6.7.1
   build_runner: ^2.4.7
-  flutter_lints: ^6.0.0
+  flutter_lints: ^4.0.0
   envied_generator: ^1.0.0
 
 # For information on the generic Dart part of this file, see the
