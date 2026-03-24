@@ -87,7 +87,7 @@ dependencies:
   #    ref: visualizer
   #    path: just_audio_platform_interface
   logging: ^1.2.0
-  marquee: ^2.3.0
+  marquee: ^2.2.3
   #marquee:
   #  git:
   #    url: https://github.com/DJDoubleD/marquee
