@@ -55,7 +55,8 @@ android {
         versionName flutterVersionName
 
         // IMPORTANT:
-        // No abiFilters here when using flutter build apk --split-per-abi
+        // Do NOT set abiFilters here when using:
+        // flutter build apk --release --split-per-abi
     }
 
     signingConfigs {
@@ -98,7 +99,7 @@ repositories {
 }
 
 dependencies {
-    // FFmpeg AAR
+    // Local FFmpeg AAR
     implementation(name: "ffmpeg-kit-lts-ndk-r25-16k", ext: "aar")
 
     // Existing local AAR
