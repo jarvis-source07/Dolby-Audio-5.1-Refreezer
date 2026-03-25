@@ -59,7 +59,7 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
 
       - name: Build release APKs (split per ABI)
-        run: flutter build apk --release --split-per-abi --verbose
+        run: flutter build apk --release --split-per-abi --verbose 2>&1 | tee flutter-build.log
 
       - name: Upload split APK artifacts
         uses: actions/upload-artifact@v6
@@ -67,3 +67,11 @@ jobs:
           name: refreezer-split-apks
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
+
+      - name: Upload Flutter build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flutter-build-log
+          path: flutter-build.log
+          if-no-files-found: warn

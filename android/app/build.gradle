@@ -54,9 +54,8 @@ android {
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
 
-        ndk {
-            abiFilters 'arm64-v8a'
-        }
+        // IMPORTANT:
+        // No abiFilters here when using flutter build apk --split-per-abi
     }
 
     signingConfigs {
@@ -102,7 +101,7 @@ dependencies {
     // FFmpeg AAR
     implementation(name: "ffmpeg-kit-lts-ndk-r25-16k", ext: "aar")
 
-    // Existing
+    // Existing local AAR
     implementation files('libs/extension-flac.aar')
 
     implementation("androidx.activity:activity-ktx:1.10.1")
