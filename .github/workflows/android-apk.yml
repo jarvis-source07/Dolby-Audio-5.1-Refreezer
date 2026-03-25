@@ -30,14 +30,14 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
-      - name: Create lib/.env from GitHub Secrets
+      - name: Create lib/.env with dummy values
         run: |
           mkdir -p lib
           cat > lib/.env <<EOF
-          deezerClientId = '${{ secrets.DEEZER_CLIENT_ID }}';
-          deezerClientSecret = '${{ secrets.DEEZER_CLIENT_SECRET }}';
-          lastFmApiKey = '${{ secrets.LASTFM_API_KEY }}';
-          lastFmApiSecret = '${{ secrets.LASTFM_API_SECRET }}';
+          deezerClientId = 'dummy_deezer_client_id';
+          deezerClientSecret = 'dummy_deezer_client_secret';
+          lastFmApiKey = 'dummy_lastfm_api_key';
+          lastFmApiSecret = 'dummy_lastfm_api_secret';
           EOF
 
       - name: Get Flutter dependencies
