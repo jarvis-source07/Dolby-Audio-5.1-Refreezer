@@ -26,13 +26,14 @@ subprojects { subproject ->
                 }
             }
 
-            def javaVersion = JavaVersion.VERSION_11
-            def androidApiVersion = 34
+            def javaVersion = JavaVersion.VERSION_17
+            def compileApiVersion = 35
+            def targetApiVersion = 34
 
-            androidExt.compileSdk = androidApiVersion
+            androidExt.compileSdk = compileApiVersion
 
             androidExt.defaultConfig {
-                targetSdk = androidApiVersion
+                targetSdk = targetApiVersion
             }
 
             androidExt.compileOptions {
@@ -44,7 +45,7 @@ subprojects { subproject ->
                 subproject.plugins.hasPlugin("org.jetbrains.kotlin.android")) {
                 subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
                     kotlinOptions {
-                        jvmTarget = "11"
+                        jvmTarget = "17"
                     }
                 }
             }
