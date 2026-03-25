@@ -59,7 +59,7 @@ jobs:
           storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          storeFile=release-keystore.jks
+          storeFile=app/release-keystore.jks
           EOF
 
           echo "Created android/key.properties"
@@ -84,19 +84,35 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
 
       - name: Build release APKs (split per ABI)
+        id: flutter_build
+        continue-on-error: true
         shell: bash
         run: |
           set -eo pipefail
           flutter build apk --release --split-per-abi --verbose 2>&1 | tee flutter-build.log
 
-      - name: Debug APK output paths
+      - name: Extract root-cause summary
         if: always()
         shell: bash
         run: |
-          echo "=== Listing build/app/outputs ==="
-          find build/app/outputs -maxdepth 4 -type f | sort || true
-          echo "=== Listing APKs only ==="
-          find build -type f -name "*.apk" | sort || true
+          {
+            echo "===== LAST 200 LINES ====="
+            tail -n 200 flutter-build.log || true
+            echo
+            echo "===== KEY ERROR MATCHES ====="
+            grep -nE "FAILURE:|What went wrong|Execution failed|Caused by:|error:|Exception|NullPointerException|A problem occurred" flutter-build.log | tail -n 200 || true
+            echo
+            echo "===== APK FILES FOUND ====="
+            find build -type f -name "*.apk" | sort || true
+          } | tee error-summary.txt
+
+      - name: Run Gradle diagnostic build (only if Flutter build failed)
+        if: steps.flutter_build.outcome == 'failure'
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd android
+          ./gradlew app:assembleRelease --stacktrace --info 2>&1 | tee ../gradle-release.log
 
       - name: Collect APK artifacts
         if: always()
@@ -104,15 +120,15 @@ jobs:
         run: |
           mkdir -p artifact-apks
           find build -type f -name "*.apk" -exec cp -v {} artifact-apks/ \; || true
-          echo "=== Collected artifacts ==="
           ls -lah artifact-apks || true
 
       - name: Upload split APK artifacts
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: refreezer-split-apks
           path: artifact-apks/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload Flutter build log
         if: always()
@@ -121,3 +137,26 @@ jobs:
           name: flutter-build-log
           path: flutter-build.log
           if-no-files-found: warn
+
+      - name: Upload error summary
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: error-summary
+          path: error-summary.txt
+          if-no-files-found: warn
+
+      - name: Upload Gradle diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gradle-release-log
+          path: gradle-release.log
+          if-no-files-found: warn
+
+      - name: Fail workflow if build failed
+        if: steps.flutter_build.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Flutter split APK build failed. Check artifacts: error-summary, flutter-build-log, gradle-release-log"
+          exit 1
