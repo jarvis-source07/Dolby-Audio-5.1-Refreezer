@@ -1,55 +1,61 @@
 allprojects {
-repositories {
-google()
-mavenCentral()
-maven { url 'https://jitpack.io' }
-}
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
 }
 
 rootProject.layout.buildDirectory = rootProject.layout.projectDirectory.dir('../build')
 
-subprojects {
-project.layout.buildDirectory = rootProject.layout.buildDirectory.dir(project.name)
+subprojects { subproject ->
+    project.layout.buildDirectory = rootProject.layout.buildDirectory.dir(project.name)
 
-afterEvaluate {
-    if (it.hasProperty('android')) {
+    afterEvaluate {
+        def androidExt = subproject.extensions.findByName("android")
+        if (androidExt != null) {
 
-        if (it.android.namespace == null) {
-            def manifest = groovy.xml.XmlSlurper.parse(file(it.android.sourceSets.main.manifest.srcFile))
-            def packageName = manifest.@package.text()
-            it.android {
-                namespace = packageName
-            }
-        }
-
-        def javaVersion = JavaVersion.VERSION_17
-        def androidApiVersion = 34
-
-        it.android {
-            compileSdk androidApiVersion
-
-            defaultConfig {
-                targetSdk androidApiVersion
+            if (androidExt.hasProperty("namespace") && androidExt.namespace == null) {
+                def manifestFile = file(androidExt.sourceSets.main.manifest.srcFile)
+                if (manifestFile.exists()) {
+                    def manifest = new groovy.xml.XmlSlurper().parse(manifestFile)
+                    def packageName = manifest.@package.text()
+                    if (packageName) {
+                        androidExt.namespace = packageName
+                    }
+                }
             }
 
-            compileOptions {
-                sourceCompatibility javaVersion
-                targetCompatibility javaVersion
+            def javaVersion = JavaVersion.VERSION_11
+            def androidApiVersion = 34
+
+            androidExt.compileSdk = androidApiVersion
+
+            androidExt.defaultConfig {
+                targetSdk = androidApiVersion
             }
 
-            kotlinOptions {
-                jvmTarget = "17"
+            androidExt.compileOptions {
+                sourceCompatibility = javaVersion
+                targetCompatibility = javaVersion
+            }
+
+            if (subproject.plugins.hasPlugin("kotlin-android") ||
+                subproject.plugins.hasPlugin("org.jetbrains.kotlin.android")) {
+                subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                    kotlinOptions {
+                        jvmTarget = "11"
+                    }
+                }
             }
         }
     }
 }
 
-}
-
 subprojects {
-project.evaluationDependsOn(':app')
+    project.evaluationDependsOn(':app')
 }
 
 tasks.register("clean", Delete) {
-delete rootProject.layout.buildDirectory
+    delete rootProject.layout.buildDirectory
 }
