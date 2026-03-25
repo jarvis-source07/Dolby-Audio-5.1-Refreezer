@@ -42,3 +42,7 @@ build/
 .dart_tool/
 .packages
 pubspec.lock
+
+release-keystore.jks
+keystore.b64
+android/key.properties
