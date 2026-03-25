@@ -52,7 +52,9 @@ dependencies:
   #equalizer_flutter: ^0.0.1
   # Gradle 8 updated version:
   equalizer_flutter:
-    path: ./equalizer_flutter
+    git:
+      url: https://github.com/Khuntarpit/equalizer_flutter.git
+      ref: 609016099841357a6c13f0cd2c9a1e50b64094a1
   #external_path: ^1.0.3
   # Gradle 8 updated version:
   external_path:
