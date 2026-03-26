@@ -59,12 +59,23 @@ jobs:
           storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          storeFile=app/release-keystore.jks
+          storeFile=release-keystore.jks
           EOF
 
           echo "Created android/key.properties"
           ls -lah android/app/release-keystore.jks
+          echo "Masked key.properties:"
           sed 's/=.*/=***MASKED***/' android/key.properties
+
+      - name: Verify signing files
+        shell: bash
+        run: |
+          echo "=== android directory ==="
+          ls -lah android || true
+          echo "=== android/app directory ==="
+          ls -lah android/app || true
+          echo "=== masked key.properties ==="
+          sed 's/=.*/=***MASKED***/' android/key.properties || true
 
       - name: Get Flutter dependencies
         shell: bash
@@ -96,11 +107,24 @@ jobs:
         shell: bash
         run: |
           {
-            echo "===== LAST 200 LINES ====="
-            tail -n 200 flutter-build.log || true
+            echo "===== FIRST KEY ERROR MATCHES ====="
+            grep -nE "FAILURE:|What went wrong|A problem occurred|Execution failed|Caused by:|error:|Exception|NullPointerException|SigningConfig|storeFile|keystore|No matching variant|is not an ABI" flutter-build.log | head -n 120 || true
             echo
-            echo "===== KEY ERROR MATCHES ====="
-            grep -nE "FAILURE:|What went wrong|Execution failed|Caused by:|error:|Exception|NullPointerException|A problem occurred" flutter-build.log | tail -n 200 || true
+
+            LINE=$(grep -nE "What went wrong|A problem occurred|Execution failed|Caused by:|error:|Exception|NullPointerException|SigningConfig|storeFile|keystore|No matching variant|is not an ABI" flutter-build.log | head -n 1 | cut -d: -f1 || true)
+
+            if [ -n "$LINE" ]; then
+              START=$((LINE-25))
+              if [ "$START" -lt 1 ]; then START=1; fi
+              END=$((LINE+60))
+              echo "===== CONTEXT AROUND FIRST ROOT-CAUSE MATCH (lines $START-$END) ====="
+              sed -n "${START},${END}p" flutter-build.log || true
+            fi
+
+            echo
+            echo "===== LAST 120 LINES ====="
+            tail -n 120 flutter-build.log || true
+
             echo
             echo "===== APK FILES FOUND ====="
             find build -type f -name "*.apk" | sort || true
@@ -120,6 +144,7 @@ jobs:
         run: |
           mkdir -p artifact-apks
           find build -type f -name "*.apk" -exec cp -v {} artifact-apks/ \; || true
+          echo "=== Collected APK artifacts ==="
           ls -lah artifact-apks || true
 
       - name: Upload split APK artifacts
