@@ -48,17 +48,33 @@ jobs:
 
       - name: Prepare Android release signing files
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           set -euo pipefail
 
           mkdir -p android/app
 
-          printf '%s' "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/release-keystore.jks
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 secret is empty or missing"
+            exit 1
+          fi
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release-keystore.jks
+
+          if [ ! -s android/app/release-keystore.jks ]; then
+            echo "Decoded keystore is empty"
+            ls -lah android/app || true
+            exit 1
+          fi
 
           cat > android/key.properties <<EOF
-          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storePassword=${ANDROID_STORE_PASSWORD}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
           storeFile=release-keystore.jks
           EOF
 
@@ -79,14 +95,17 @@ jobs:
 
       - name: Verify keystore can be read
         shell: bash
+        env:
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           set -euo pipefail
           keytool -list \
             -v \
             -keystore android/app/release-keystore.jks \
             -storetype JKS \
-            -storepass "${{ secrets.ANDROID_STORE_PASSWORD }}" \
-            -alias "${{ secrets.ANDROID_KEY_ALIAS }}"
+            -storepass "${ANDROID_STORE_PASSWORD}" \
+            -alias "${ANDROID_KEY_ALIAS}"
 
       - name: Get Flutter dependencies
         shell: bash
@@ -187,7 +206,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Gradle diagnostic log
-        if: always()
+        if: steps.flutter_build.outcome == 'failure'
         uses: actions/upload-artifact@v6
         with:
           name: gradle-release-log
