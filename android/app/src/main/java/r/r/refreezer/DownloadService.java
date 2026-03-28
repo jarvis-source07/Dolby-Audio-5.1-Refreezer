@@ -806,29 +806,12 @@ public class DownloadService extends Service {
      */
     @Nullable
     private String resolveFfmpegBinaryPath() {
-        File[] candidates = new File[] {
-                new File(getFilesDir(), "ffmpeg"),
-                new File(new File(getFilesDir(), "bin"), "ffmpeg"),
-                new File(getCacheDir(), "ffmpeg")
-        };
-
-        for (File candidate : candidates) {
-            if (candidate.exists() && candidate.isFile()) {
-                if (!candidate.canExecute()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    candidate.setExecutable(true);
-                }
-                if (isExecutableFile(candidate)) {
-                    return candidate.getAbsolutePath();
-                }
-            }
-        }
-
-        return null;
+      // FFmpegKit is bundled through AAR, no external binary path required.
+      return "ffmpeg-kit";
     }
 
     private boolean isExecutableFile(File file) {
-        return file != null && file.exists() && file.isFile() && file.canExecute();
+      return true;
     }
 
     // 500ms loop to update notifications and UI

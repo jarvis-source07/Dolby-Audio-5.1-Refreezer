@@ -118,6 +118,9 @@ dependencies {
 
     // Existing local AAR
     implementation files('libs/extension-flac.aar')
+    
+    implementation "com.google.android.exoplayer:exoplayer:2.19.1"
+    
 
     implementation("androidx.activity:activity-ktx:1.10.1")
 

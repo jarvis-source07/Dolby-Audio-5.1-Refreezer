@@ -449,8 +449,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         ReturnCode returnCode = session.getReturnCode();
 
         int exitCode = -1;
-        if (returnCode != null && returnCode.getValue() != null) {
-            exitCode = returnCode.getValue();
+        if (returnCode != null) {
+           exitCode = returnCode.getValue();
         }
 
         String output = "";
