@@ -16,6 +16,10 @@ Settings _$SettingsFromJson(Map<String, dynamic> json) => Settings(
       ..playbackMode =
           $enumDecodeNullable(_$PlaybackModeEnumMap, json['playbackMode']) ??
               PlaybackMode.normal
+<<<<<<< HEAD
+=======
+      ..surroundPreset = json['surroundPreset'] as String? ?? 'balanced'
+>>>>>>> 4c098f3 (Backup before rollback to 8ae9a3e)
       ..wifiQuality =
           $enumDecodeNullable(_$AudioQualityEnumMap, json['wifiQuality']) ??
               AudioQuality.MP3_320
@@ -96,6 +100,10 @@ Map<String, dynamic> _$SettingsToJson(Settings instance) => <String, dynamic>{
       'ignoreInterruptions': instance.ignoreInterruptions,
       'enableEqualizer': instance.enableEqualizer,
       'playbackMode': _$PlaybackModeEnumMap[instance.playbackMode]!,
+<<<<<<< HEAD
+=======
+      'surroundPreset': instance.surroundPreset,
+>>>>>>> 4c098f3 (Backup before rollback to 8ae9a3e)
       'arl': instance.arl,
       'wifiQuality': _$AudioQualityEnumMap[instance.wifiQuality]!,
       'mobileQuality': _$AudioQualityEnumMap[instance.mobileQuality]!,

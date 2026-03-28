@@ -39,11 +39,14 @@ class Settings {
   @JsonKey(defaultValue: PlaybackMode.normal)
   late PlaybackMode playbackMode;
 
+  // Surround preset
+  @JsonKey(defaultValue: 'balanced')
+  late String surroundPreset;
+
   // Account
   String? arl;
 
-  @JsonKey(includeFromJson: false)
-  @JsonKey(includeToJson: false)
+  @JsonKey(includeFromJson: false, includeToJson: false)
   bool offlineMode = false;
 
   // Quality
@@ -283,19 +286,11 @@ class Settings {
   Future<void> save() async {
     File f = File(await getPath());
     await f.writeAsString(jsonEncode(toJson()));
-    downloadManager.updateServiceSettings();
+    await downloadManager.updateServiceSettings();
   }
 
   Future<void> updateAudioServiceQuality() async {
     await GetIt.I<AudioPlayerHandler>().updateQueueQuality();
-    // Send wifi & mobile quality to audio service isolate
-    // await GetIt.I<AudioPlayerHandler>().customAction(
-    //   'updateQuality',
-    //   {
-    //     'mobileQuality': getQualityInt(mobileQuality),
-    //     'wifiQuality': getQualityInt(wifiQuality),
-    //   },
-    // );
   }
 
   bool get isSurroundMode => playbackMode == PlaybackMode.surround;
@@ -309,6 +304,23 @@ class Settings {
     } catch (e, st) {
       Logger.root.warning(
         'Failed to reload queue after playback mode change: $e',
+        e,
+        st,
+      );
+    }
+  }
+
+  Future<void> setSurroundPreset(String preset) async {
+    surroundPreset = preset;
+    await save();
+
+    if (!isSurroundMode) return;
+
+    try {
+      await GetIt.I<AudioPlayerHandler>().reloadQueueForPlaybackModeChange();
+    } catch (e, st) {
+      Logger.root.warning(
+        'Failed to reload queue after surround preset change: $e',
         e,
         st,
       );

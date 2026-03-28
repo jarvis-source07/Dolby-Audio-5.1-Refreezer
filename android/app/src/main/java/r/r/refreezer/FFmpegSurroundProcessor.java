@@ -16,14 +16,14 @@ import java.util.List;
  * FFmpegKit-based implementation for:
  * Stereo input -> derived surround matrix -> AC3 encode -> optional TS mux
  *
- * IMPORTANT:
- * - This version uses FFmpegKit from the bundled/local AAR.
- * - No external ProcessBuilder-based ffmpeg binary execution is needed.
- * - Constructor is kept compatible with previous code paths.
+ * Current recommended strategy:
+ * - Primary/master artifact = AC3
+ * - Optional secondary artifact = TS
  *
- * Recommended strategy:
- * - Master artifact = AC3
- * - Playback artifact = TS (for current app plumbing / compatibility)
+ * Notes:
+ * - Uses FFmpegKit bundled through local AAR
+ * - No external ProcessBuilder-based ffmpeg binary required
+ * - Constructor kept compatible with previous code paths
  */
 public class FFmpegSurroundProcessor extends SurroundProcessor {
 
@@ -41,7 +41,6 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
     /**
      * With FFmpegKit linked in the app, availability is effectively true.
-     * Kept simple and compatible with existing callers.
      */
     public boolean isAvailable() {
         return true;
@@ -57,7 +56,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     null,
                     null,
                     "AC3",
-                    "ts",
+                    "ac3",
                     "balanced",
                     0,
                     0,
@@ -79,8 +78,10 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             );
         }
 
+        final boolean remoteInput = isRemoteInput(config.inputPath);
         File inputFile = new File(config.inputPath == null ? "" : config.inputPath);
-        if (!inputFile.exists() || !inputFile.isFile()) {
+
+        if (!remoteInput && (!inputFile.exists() || !inputFile.isFile())) {
             return Result.failure(
                     config.trackId,
                     config.inputPath,
@@ -103,7 +104,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     "AC3",
                     containerLabel(config.outputMode),
                     config.preset.value(),
-                    safeLength(inputFile),
+                    remoteInput ? 0 : safeLength(inputFile),
                     0,
                     "Failed to create output directory"
             );
@@ -121,7 +122,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                             "AC3",
                             containerLabel(config.outputMode),
                             config.preset.value(),
-                            safeLength(inputFile),
+                            remoteInput ? 0 : safeLength(inputFile),
                             safeLength(finalOutputFile),
                             "Failed to overwrite existing output file"
                     );
@@ -134,7 +135,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                         "AC3",
                         containerLabel(config.outputMode),
                         config.preset.value(),
-                        safeLength(inputFile),
+                        remoteInput ? 0 : safeLength(inputFile),
                         safeLength(finalOutputFile),
                         "Output already exists"
                 );
@@ -196,29 +197,30 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             if (!ensureParentDirectory(ac3OutputFile)) {
                 return Result.failure(
                         config.trackId,
-                        inputFile.getAbsolutePath(),
+                        config.inputPath,
                         ac3OutputFile.getAbsolutePath(),
                         "AC3",
                         "ac3",
                         config.preset.value(),
-                        safeLength(inputFile),
+                        isRemoteInput(config.inputPath) ? 0 : safeLength(inputFile),
                         0,
                         "Failed to create AC3 output directory"
                 );
             }
 
-            List<String> command = buildStereoToAc3Command(config, inputFile, ac3OutputFile);
+            String inputArg = resolveInputArg(config, inputFile);
+            List<String> command = buildStereoToAc3Command(config, inputArg, ac3OutputFile);
             ProcessRunResult runResult = runCommand(command);
 
-            if (runResult.exitCode != 0 || !ac3OutputFile.exists()) {
+            if (runResult.exitCode != 0 || !ac3OutputFile.exists() || ac3OutputFile.length() <= 0) {
                 return Result.failure(
                         config.trackId,
-                        inputFile.getAbsolutePath(),
+                        config.inputPath,
                         ac3OutputFile.getAbsolutePath(),
                         "AC3",
                         "ac3",
                         config.preset.value(),
-                        safeLength(inputFile),
+                        isRemoteInput(config.inputPath) ? 0 : safeLength(inputFile),
                         safeLength(ac3OutputFile),
                         "AC3 render failed: " + trimForError(runResult.stderr)
                 );
@@ -226,12 +228,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
             return Result.success(
                     config.trackId,
-                    inputFile.getAbsolutePath(),
+                    config.inputPath,
                     ac3OutputFile.getAbsolutePath(),
                     "AC3",
                     "ac3",
                     config.preset.value(),
-                    safeLength(inputFile),
+                    isRemoteInput(config.inputPath) ? 0 : safeLength(inputFile),
                     safeLength(ac3OutputFile),
                     "AC3 master generated"
             );
@@ -240,12 +242,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             Log.e(TAG, "renderToAc3Master failed", e);
             return Result.failure(
                     config.trackId,
-                    inputFile.getAbsolutePath(),
+                    config.inputPath,
                     ac3OutputFile.getAbsolutePath(),
                     "AC3",
                     "ac3",
                     config.preset.value(),
-                    safeLength(inputFile),
+                    isRemoteInput(config.inputPath) ? 0 : safeLength(inputFile),
                     safeLength(ac3OutputFile),
                     "AC3 render exception: " + e.getMessage()
             );
@@ -290,7 +292,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             List<String> command = buildAc3ToTsMuxCommand(ac3InputFile, tsOutputFile);
             ProcessRunResult runResult = runCommand(command);
 
-            if (runResult.exitCode != 0 || !tsOutputFile.exists()) {
+            if (runResult.exitCode != 0 || !tsOutputFile.exists() || tsOutputFile.length() <= 0) {
                 return Result.failure(
                         config.trackId,
                         ac3InputFile.getAbsolutePath(),
@@ -336,17 +338,15 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
      * Builds ffmpeg command for:
      * stereo -> matrix-derived 5.1 -> AC3
      *
-     * This is a STARTER matrix:
+     * Starter matrix:
      * - balanced front image
      * - subtle center
      * - modest LFE
      * - decorrelated-ish rear feel using cross subtraction
-     *
-     * You can tune this later.
      */
     protected List<String> buildStereoToAc3Command(
             Config config,
-            File inputFile,
+            String inputArg,
             File ac3OutputFile
     ) {
         List<String> cmd = new ArrayList<>();
@@ -354,7 +354,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         cmd.add("-y");
 
         cmd.add("-i");
-        cmd.add(inputFile.getAbsolutePath());
+        cmd.add(inputArg);
 
         cmd.add("-vn");
 
@@ -403,8 +403,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
     /**
      * Starter surround matrix presets.
-     * These are NOT final audiophile tunings.
-     * They're just practical initial templates.
+     * These are not final audiophile tunings.
      */
     protected String buildPanFilter(Preset preset) {
         switch (preset) {
@@ -450,13 +449,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
         int exitCode = -1;
         if (returnCode != null) {
-           exitCode = returnCode.getValue();
+            exitCode = returnCode.getValue();
         }
 
         String output = "";
         try {
-            // Some FFmpegKit builds expose session output, some do not reliably separate streams.
-            // We keep this guarded to stay compile/runtime-friendly.
+            // Keep compile/runtime-safe across FFmpegKit variants.
             output = "";
         } catch (Exception ignored) {
         }
@@ -523,6 +521,21 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     protected long safeLength(File file) {
         if (file == null || !file.exists()) return 0;
         return file.length();
+    }
+
+    private boolean isRemoteInput(String inputPath) {
+        if (inputPath == null) return false;
+        String v = inputPath.trim().toLowerCase();
+        return v.startsWith("http://")
+                || v.startsWith("https://")
+                || v.startsWith("content://");
+    }
+
+    private String resolveInputArg(Config config, File inputFile) {
+        if (isRemoteInput(config.inputPath)) {
+            return config.inputPath;
+        }
+        return inputFile.getAbsolutePath();
     }
 
     protected static class ProcessRunResult {

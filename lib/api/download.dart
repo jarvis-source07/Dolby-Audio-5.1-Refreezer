@@ -101,7 +101,7 @@ class DownloadManager {
   }
 
   // ----------------------------
-  // Surround helpers (new)
+  // Surround helpers
   // ----------------------------
 
   /// Returns the directory used for generated surround files.
@@ -126,43 +126,75 @@ class DownloadManager {
   /// Builds a surround output path for a track.
   Future<String> getSurroundPathForTrack(
     String trackId, {
-    String extension = 'ts',
+    String extension = 'ac3',
     bool persistent = false,
   }) async {
-    final Directory dir =
-        await getSurroundDirectory(persistent: persistent);
+    final Directory dir = await getSurroundDirectory(persistent: persistent);
     return p.join(dir.path, '$trackId.$extension');
   }
 
-  /// Finds an already existing surround file using the same lookup idea
-  /// as the audio service (temp -> docs -> external app dir).
+  /// Finds an already existing surround file.
+  ///
+  /// Preference:
+  /// - if [extension] is provided => search that extension only
+  /// - otherwise AC3 first, then TS
   Future<String?> findExistingSurroundPath(
     String trackId, {
-    String extension = 'ts',
+    String? extension,
   }) async {
-    final List<String> candidates = [];
+    final List<String> extensions;
 
-    try {
-      final tempDir = await getTemporaryDirectory();
-      candidates.add(p.join(tempDir.path, 'surround', '$trackId.$extension'));
-    } catch (_) {}
+    if (extension != null && extension.trim().isNotEmpty) {
+      extensions = [extension.trim()];
+    } else {
+      extensions = const ['ac3', 'ts'];
+    }
 
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      candidates.add(p.join(docsDir.path, 'surround', '$trackId.$extension'));
-    } catch (_) {}
+    // Ask native side first because it already knows the same lookup strategy
+    // and current native path prefers AC3 as primary artifact.
+    for (final ext in extensions) {
+      try {
+        final String? nativePath =
+            await platform.invokeMethod<String>('findExistingSurroundPath', {
+          'trackId': trackId,
+          'extension': ext,
+        });
 
-    try {
-      final extDir = await getExternalStorageDirectory();
-      if (extDir != null) {
-        candidates.add(p.join(extDir.path, 'surround', '$trackId.$extension'));
-      }
-    } catch (_) {}
+        if (nativePath != null && nativePath.trim().isNotEmpty) {
+          final file = File(nativePath);
+          if (await file.exists()) {
+            return file.path;
+          }
+        }
+      } catch (_) {}
+    }
 
-    for (final candidate in candidates) {
-      final file = File(candidate);
-      if (await file.exists()) {
-        return file.path;
+    // Fallback local lookup
+    for (final ext in extensions) {
+      final List<String> candidates = [];
+
+      try {
+        final tempDir = await getTemporaryDirectory();
+        candidates.add(p.join(tempDir.path, 'surround', '$trackId.$ext'));
+      } catch (_) {}
+
+      try {
+        final docsDir = await getApplicationDocumentsDirectory();
+        candidates.add(p.join(docsDir.path, 'surround', '$trackId.$ext'));
+      } catch (_) {}
+
+      try {
+        final extDir = await getExternalStorageDirectory();
+        if (extDir != null) {
+          candidates.add(p.join(extDir.path, 'surround', '$trackId.$ext'));
+        }
+      } catch (_) {}
+
+      for (final candidate in candidates) {
+        final file = File(candidate);
+        if (await file.exists()) {
+          return file.path;
+        }
       }
     }
 
@@ -171,7 +203,7 @@ class DownloadManager {
 
   Future<bool> hasSurroundFile(
     String trackId, {
-    String extension = 'ts',
+    String? extension,
   }) async {
     return (await findExistingSurroundPath(trackId, extension: extension)) !=
         null;
@@ -179,7 +211,7 @@ class DownloadManager {
 
   Future<File?> getSurroundFileForTrack(
     String trackId, {
-    String extension = 'ts',
+    String? extension,
   }) async {
     final String? path =
         await findExistingSurroundPath(trackId, extension: extension);
@@ -191,7 +223,7 @@ class DownloadManager {
   Future<Track> attachSurroundMetadata(
     Track track, {
     String preset = 'balanced',
-    String extension = 'ts',
+    String? extension,
   }) async {
     if ((track.id ?? '').isEmpty) return track;
 
@@ -213,39 +245,59 @@ class DownloadManager {
     );
   }
 
-  /// Removes surround files for a track from temp/docs/external app dir.
+  /// Removes surround files for a track.
+  ///
+  /// If [extension] is omitted/null/empty, deletes both AC3 and TS variants.
   Future<void> removeSurroundFilesForTrack(
     String trackId, {
-    String extension = 'ts',
+    String? extension,
   }) async {
-    final List<String> candidates = [];
+    final List<String> extensions;
 
-    try {
-      final tempDir = await getTemporaryDirectory();
-      candidates.add(p.join(tempDir.path, 'surround', '$trackId.$extension'));
-    } catch (_) {}
+    if (extension != null && extension.trim().isNotEmpty) {
+      extensions = [extension.trim()];
+    } else {
+      extensions = const ['ac3', 'ts'];
+    }
 
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      candidates.add(p.join(docsDir.path, 'surround', '$trackId.$extension'));
-    } catch (_) {}
+    for (final ext in extensions) {
+      final List<String> candidates = [];
 
-    try {
-      final extDir = await getExternalStorageDirectory();
-      if (extDir != null) {
-        candidates.add(p.join(extDir.path, 'surround', '$trackId.$extension'));
-      }
-    } catch (_) {}
-
-    for (final candidate in candidates) {
       try {
-        final file = File(candidate);
-        if (await file.exists()) {
-          await file.delete();
+        final tempDir = await getTemporaryDirectory();
+        candidates.add(p.join(tempDir.path, 'surround', '$trackId.$ext'));
+      } catch (_) {}
+
+      try {
+        final docsDir = await getApplicationDocumentsDirectory();
+        candidates.add(p.join(docsDir.path, 'surround', '$trackId.$ext'));
+      } catch (_) {}
+
+      try {
+        final extDir = await getExternalStorageDirectory();
+        if (extDir != null) {
+          candidates.add(p.join(extDir.path, 'surround', '$trackId.$ext'));
         }
-      } catch (e) {
-        Logger.root.warning('Failed to delete surround file: $candidate', e);
+      } catch (_) {}
+
+      for (final candidate in candidates) {
+        try {
+          final file = File(candidate);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          Logger.root.warning('Failed to delete surround file: $candidate', e);
+        }
       }
+
+      // Also ask native side to delete its known paths
+      try {
+        await platform.invokeMethod('deleteSurroundFile', {
+          'trackId': trackId,
+          'extension': ext,
+        });
+      } catch (_) {}
     }
   }
 
@@ -274,6 +326,13 @@ class DownloadManager {
       }
     }
 
+    // Also clear native side known cache folders
+    try {
+      await platform.invokeMethod('clearSurroundCache', {
+        'persistent': persistent,
+      });
+    } catch (_) {}
+
     // Recreate dirs for future use
     try {
       await getSurroundDirectory(persistent: false);
@@ -282,6 +341,62 @@ class DownloadManager {
       try {
         await getSurroundDirectory(persistent: true);
       } catch (_) {}
+    }
+  }
+
+  // ----------------------------
+  // Native AC3 direct playback helpers
+  // ----------------------------
+
+  Future<bool> isDirectAc3PlaybackSupported({
+    int sampleRateHz = 48000,
+  }) async {
+    try {
+      return await platform.invokeMethod<bool>(
+            'isDirectAc3PlaybackSupported',
+            {'sampleRateHz': sampleRateHz},
+          ) ??
+          false;
+    } catch (e) {
+      Logger.root.warning('isDirectAc3PlaybackSupported failed', e);
+      return false;
+    }
+  }
+
+  Future<bool> playNativeAc3(
+    String path, {
+    int sampleRateHz = 48000,
+  }) async {
+    try {
+      return await platform.invokeMethod<bool>(
+            'playNativeAc3',
+            {
+              'path': path,
+              'sampleRateHz': sampleRateHz,
+            },
+          ) ??
+          false;
+    } catch (e) {
+      Logger.root.warning('playNativeAc3 failed', e);
+      return false;
+    }
+  }
+
+  Future<bool> stopNativeAc3() async {
+    try {
+      return await platform.invokeMethod<bool>('stopNativeAc3') ?? false;
+    } catch (e) {
+      Logger.root.warning('stopNativeAc3 failed', e);
+      return false;
+    }
+  }
+
+  Future<bool> isNativeAc3Playing() async {
+    try {
+      return await platform.invokeMethod<bool>('isNativeAc3Playing') ?? false;
+    } catch (e) {
+      Logger.root.warning('isNativeAc3Playing failed', e);
+      return false;
     }
   }
 
@@ -1001,6 +1116,11 @@ class DownloadManager {
 
   // Send settings to download service
   Future updateServiceSettings() async {
+    Logger.root.info(
+      'Sending download service settings: '
+      'playbackMode=${settings.playbackMode.name}, '
+      'surroundPreset=${settings.surroundPreset}',
+    );
     await platform.invokeMethod('updateSettings', settings.getServiceSettings());
   }
 

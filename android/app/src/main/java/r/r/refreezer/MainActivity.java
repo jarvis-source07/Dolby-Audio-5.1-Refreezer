@@ -6,6 +6,9 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -22,7 +25,9 @@ import androidx.annotation.Nullable;
 
 import com.ryanheise.audioservice.AudioServiceActivity;
 
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.lang.ref.WeakReference;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
@@ -54,6 +59,29 @@ public class MainActivity extends AudioServiceActivity {
     // Data if started from intent
     String intentPreload;
 
+    // ----------------------------
+    // Pending service message queue
+    // ----------------------------
+
+    private static class PendingServiceMessage {
+        final int type;
+        final Bundle data;
+
+        PendingServiceMessage(int type, @Nullable Bundle data) {
+            this.type = type;
+            this.data = data == null ? null : new Bundle(data);
+        }
+    }
+
+    final ArrayList<PendingServiceMessage> pendingServiceMessages = new ArrayList<>();
+    Bundle lastSettingsBundle;
+
+    // ----------------------------
+    // Native AC3 player
+    // ----------------------------
+
+    private NativeAc3Player nativeAc3Player;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         Intent intent = getIntent();
@@ -69,6 +97,10 @@ public class MainActivity extends AudioServiceActivity {
         ChangeIconPlugin changeIconPlugin = new ChangeIconPlugin(this);
         changeIconPlugin.initWith(flutterEngine.getDartExecutor().getBinaryMessenger());
         changeIconPlugin.tryFixLauncherIconIfNeeded();
+
+        if (nativeAc3Player == null) {
+            nativeAc3Player = new NativeAc3Player();
+        }
 
         // Flutter method channel
         new MethodChannel(
@@ -119,7 +151,7 @@ public class MainActivity extends AudioServiceActivity {
                     db.setTransactionSuccessful();
                     db.endTransaction();
 
-                    sendMessage(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
+                    sendMessageOrQueue(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
 
                     result.success(null);
                     return;
@@ -145,7 +177,7 @@ public class MainActivity extends AudioServiceActivity {
             if (call.method.equals("updateSettings")) {
                 Bundle bundle = new Bundle();
                 bundle.putString("json", call.argument("json").toString());
-                sendMessage(DownloadService.SERVICE_SETTINGS_UPDATE, bundle);
+                sendMessageOrQueue(DownloadService.SERVICE_SETTINGS_UPDATE, bundle);
 
                 result.success(null);
                 return;
@@ -153,21 +185,21 @@ public class MainActivity extends AudioServiceActivity {
 
             // Load downloads from DB in service
             if (call.method.equals("loadDownloads")) {
-                sendMessage(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
+                sendMessageOrQueue(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
 
             // Start/Resume downloading
             if (call.method.equals("start")) {
-                sendMessage(DownloadService.SERVICE_START_DOWNLOAD, null);
+                sendMessageOrQueue(DownloadService.SERVICE_START_DOWNLOAD, null);
                 result.success(serviceBound);
                 return;
             }
 
             // Stop downloading
             if (call.method.equals("stop")) {
-                sendMessage(DownloadService.SERVICE_STOP_DOWNLOADS, null);
+                sendMessageOrQueue(DownloadService.SERVICE_STOP_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
@@ -176,14 +208,14 @@ public class MainActivity extends AudioServiceActivity {
             if (call.method.equals("removeDownload")) {
                 Bundle bundle = new Bundle();
                 bundle.putInt("id", (int) call.argument("id"));
-                sendMessage(DownloadService.SERVICE_REMOVE_DOWNLOAD, bundle);
+                sendMessageOrQueue(DownloadService.SERVICE_REMOVE_DOWNLOAD, bundle);
                 result.success(null);
                 return;
             }
 
             // Retry download
             if (call.method.equals("retryDownloads")) {
-                sendMessage(DownloadService.SERVICE_RETRY_DOWNLOADS, null);
+                sendMessageOrQueue(DownloadService.SERVICE_RETRY_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
@@ -192,7 +224,7 @@ public class MainActivity extends AudioServiceActivity {
             if (call.method.equals("removeDownloads")) {
                 Bundle bundle = new Bundle();
                 bundle.putInt("state", (int) call.argument("state"));
-                sendMessage(DownloadService.SERVICE_REMOVE_DOWNLOADS, bundle);
+                sendMessageOrQueue(DownloadService.SERVICE_REMOVE_DOWNLOADS, bundle);
                 result.success(null);
                 return;
             }
@@ -254,7 +286,7 @@ public class MainActivity extends AudioServiceActivity {
                 boolean external = externalArg != null && externalArg;
 
                 if (extension == null || extension.trim().isEmpty()) {
-                    extension = "ts";
+                    extension = "ac3";
                 }
 
                 File surroundFile = buildSurroundFile(trackId, extension, persistent, external);
@@ -262,16 +294,13 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Finds first existing surround file in temp -> docs -> external app dir
+            // Finds first existing surround file in preferred order:
+            // AC3 primary, TS fallback (when extension omitted)
             if (call.method.equals("findExistingSurroundPath")) {
                 String trackId = call.argument("trackId");
                 String extension = call.argument("extension");
 
-                if (extension == null || extension.trim().isEmpty()) {
-                    extension = "ts";
-                }
-
-                String existing = findExistingSurroundPath(trackId, extension);
+                String existing = findExistingSurroundPathSmart(trackId, extension);
                 result.success(existing);
                 return;
             }
@@ -282,15 +311,11 @@ public class MainActivity extends AudioServiceActivity {
                 String trackId = call.argument("trackId");
                 String extension = call.argument("extension");
 
-                if (extension == null || extension.trim().isEmpty()) {
-                    extension = "ts";
-                }
-
                 boolean exists;
                 if (path != null && !path.trim().isEmpty()) {
                     exists = new File(path).exists();
                 } else {
-                    exists = findExistingSurroundPath(trackId, extension) != null;
+                    exists = findExistingSurroundPathSmart(trackId, extension) != null;
                 }
 
                 result.success(exists);
@@ -303,10 +328,6 @@ public class MainActivity extends AudioServiceActivity {
                 String trackId = call.argument("trackId");
                 String extension = call.argument("extension");
 
-                if (extension == null || extension.trim().isEmpty()) {
-                    extension = "ts";
-                }
-
                 boolean deleted = false;
 
                 if (path != null && !path.trim().isEmpty()) {
@@ -315,7 +336,13 @@ public class MainActivity extends AudioServiceActivity {
                         deleted = file.delete();
                     }
                 } else if (trackId != null && !trackId.trim().isEmpty()) {
-                    deleted = deleteSurroundFilesForTrack(trackId, extension);
+                    if (extension == null || extension.trim().isEmpty()) {
+                        boolean deletedAc3 = deleteSurroundFilesForTrack(trackId, "ac3");
+                        boolean deletedTs = deleteSurroundFilesForTrack(trackId, "ts");
+                        deleted = deletedAc3 || deletedTs;
+                    } else {
+                        deleted = deleteSurroundFilesForTrack(trackId, extension);
+                    }
                 }
 
                 result.success(deleted);
@@ -333,7 +360,7 @@ public class MainActivity extends AudioServiceActivity {
             }
 
             // ----------------------------
-            // FFmpeg helper methods (new)
+            // FFmpeg helper methods
             // ----------------------------
 
             if (call.method.equals("isFfmpegAvailable")) {
@@ -399,7 +426,7 @@ public class MainActivity extends AudioServiceActivity {
 
                         String resolvedOutputPath = explicitOutputPath;
                         if (resolvedOutputPath == null || resolvedOutputPath.trim().isEmpty()) {
-                            String ext = outputMode == SurroundProcessor.OutputMode.AC3 ? "ac3" : "ts";
+                            String ext = outputMode == SurroundProcessor.OutputMode.TS ? "ts" : "ac3";
                             File autoOutput = buildSurroundFile(trackId, ext, persistent, false);
                             if (autoOutput == null) {
                                 mainHandler.post(() -> result.success(errorMap(
@@ -445,6 +472,71 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
+            // ----------------------------
+            // Native AC3 direct playback
+            // ----------------------------
+
+            if (call.method.equals("isDirectAc3PlaybackSupported")) {
+                Integer sampleRateArg = call.argument("sampleRateHz");
+                int sampleRateHz = sampleRateArg != null ? sampleRateArg : 48000;
+                result.success(isDirectAc3PlaybackSupported(sampleRateHz));
+                return;
+            }
+
+            if (call.method.equals("playNativeAc3")) {
+                final String path = call.argument("path");
+                final Integer sampleRateArg = call.argument("sampleRateHz");
+                final int sampleRateHz = sampleRateArg != null ? sampleRateArg : 48000;
+
+                if (path == null || path.trim().isEmpty()) {
+                    result.error("invalid_args", "path is required", null);
+                    return;
+                }
+
+                File file = new File(path);
+                if (!file.exists() || !file.isFile()) {
+                    result.error("file_missing", "AC3 file not found", null);
+                    return;
+                }
+
+                if (!isDirectAc3PlaybackSupported(sampleRateHz)) {
+                    result.error(
+                            "direct_playback_unsupported",
+                            "Direct AC3 playback is not supported on the current route/device",
+                            null
+                    );
+                    return;
+                }
+
+                try {
+                    if (nativeAc3Player == null) {
+                        nativeAc3Player = new NativeAc3Player();
+                    }
+                    nativeAc3Player.start(path, sampleRateHz);
+                    result.success(true);
+                } catch (Exception e) {
+                    Log.e("NATIVE_AC3", "playNativeAc3 failed", e);
+                    result.error("native_ac3_error", e.getMessage(), null);
+                }
+                return;
+            }
+
+            if (call.method.equals("stopNativeAc3")) {
+                try {
+                    stopNativeAc3();
+                    result.success(true);
+                } catch (Exception e) {
+                    Log.e("NATIVE_AC3", "stopNativeAc3 failed", e);
+                    result.error("native_ac3_error", e.getMessage(), null);
+                }
+                return;
+            }
+
+            if (call.method.equals("isNativeAc3Playing")) {
+                result.success(nativeAc3Player != null && nativeAc3Player.isPlaying());
+                return;
+            }
+
             // Stop services
             if (call.method.equals("kill")) {
                 Intent intent = new Intent(this, DownloadService.class);
@@ -453,6 +545,7 @@ public class MainActivity extends AudioServiceActivity {
                     streamServer.stop();
                     streamServer = null;
                 }
+                stopNativeAc3();
                 result.success(null);
                 return;
             }
@@ -534,7 +627,9 @@ public class MainActivity extends AudioServiceActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        db.close();
+        if (db != null && db.isOpen()) {
+            db.close();
+        }
     }
 
     @Override
@@ -544,6 +639,8 @@ public class MainActivity extends AudioServiceActivity {
         if (streamServer != null) {
             streamServer.stop();
         }
+
+        stopNativeAc3();
 
         if (serviceBound) {
             unbindService(connection);
@@ -558,6 +655,7 @@ public class MainActivity extends AudioServiceActivity {
             serviceMessenger = new Messenger(iBinder);
             serviceBound = true;
             Log.d("DD", "Service Bound!");
+            flushPendingServiceMessages();
         }
 
         @Override
@@ -627,7 +725,10 @@ public class MainActivity extends AudioServiceActivity {
         }
     }
 
+    // ----------------------------
     // Send message to service
+    // ----------------------------
+
     void sendMessage(int type, Bundle data) {
         if (serviceBound && serviceMessenger != null) {
             Message msg = Message.obtain(null, type);
@@ -637,6 +738,38 @@ public class MainActivity extends AudioServiceActivity {
             } catch (RemoteException e) {
                 e.printStackTrace();
             }
+        }
+    }
+
+    void sendMessageOrQueue(int type, @Nullable Bundle data) {
+        if (serviceBound && serviceMessenger != null) {
+            sendMessage(type, data);
+            return;
+        }
+
+        if (type == DownloadService.SERVICE_SETTINGS_UPDATE && data != null) {
+            lastSettingsBundle = new Bundle(data);
+        }
+
+        pendingServiceMessages.add(new PendingServiceMessage(type, data));
+        connectService();
+    }
+
+    void flushPendingServiceMessages() {
+        if (!serviceBound || serviceMessenger == null) return;
+
+        if (lastSettingsBundle != null) {
+            sendMessage(DownloadService.SERVICE_SETTINGS_UPDATE, lastSettingsBundle);
+        }
+
+        ArrayList<PendingServiceMessage> copy = new ArrayList<>(pendingServiceMessages);
+        pendingServiceMessages.clear();
+
+        for (PendingServiceMessage pm : copy) {
+            if (pm.type == DownloadService.SERVICE_SETTINGS_UPDATE) {
+                continue;
+            }
+            sendMessage(pm.type, pm.data);
         }
     }
 
@@ -705,7 +838,7 @@ public class MainActivity extends AudioServiceActivity {
         File dir = getSurroundDirectory(persistent, external);
         if (dir == null) return null;
 
-        String safeExtension = extension.trim().isEmpty() ? "ts" : extension.trim();
+        String safeExtension = extension.trim().isEmpty() ? "ac3" : extension.trim();
         return new File(dir, trackId + "." + safeExtension);
     }
 
@@ -729,6 +862,21 @@ public class MainActivity extends AudioServiceActivity {
         }
 
         return null;
+    }
+
+    @Nullable
+    private String findExistingSurroundPathSmart(@Nullable String trackId, @Nullable String extension) {
+        if (trackId == null || trackId.trim().isEmpty()) return null;
+
+        if (extension != null && !extension.trim().isEmpty()) {
+            String found = findExistingSurroundPath(trackId, extension.trim());
+            if (found != null) return found;
+        }
+
+        String ac3 = findExistingSurroundPath(trackId, "ac3");
+        if (ac3 != null) return ac3;
+
+        return findExistingSurroundPath(trackId, "ts");
     }
 
     private boolean deleteSurroundFilesForTrack(@Nullable String trackId, @NonNull String extension) {
@@ -809,21 +957,16 @@ public class MainActivity extends AudioServiceActivity {
 
     @Nullable
     private String resolveFfmpegBinaryPath() {
-     // FFmpegKit is bundled through AAR, no external binary path required.
-     return "ffmpeg-kit";
+        // FFmpegKit is bundled through AAR, no external binary path required.
+        return "ffmpeg-kit";
     }
-
-    private boolean isExecutableFile(@Nullable File file) {
-     return true;
-    }
-
 
     private SurroundProcessor.OutputMode parseOutputMode(@Nullable String raw) {
-        if (raw == null) return SurroundProcessor.OutputMode.TS;
-        if ("ac3".equalsIgnoreCase(raw.trim())) {
-            return SurroundProcessor.OutputMode.AC3;
+        if (raw == null) return SurroundProcessor.OutputMode.AC3;
+        if ("ts".equalsIgnoreCase(raw.trim())) {
+            return SurroundProcessor.OutputMode.TS;
         }
-        return SurroundProcessor.OutputMode.TS;
+        return SurroundProcessor.OutputMode.AC3;
     }
 
     private HashMap<String, Object> surroundResultToMap(
@@ -851,6 +994,184 @@ public class MainActivity extends AudioServiceActivity {
         out.put("success", false);
         out.put("error", error);
         return out;
+    }
+
+    // --------------------------------------
+    // Native AC3 helpers
+    // --------------------------------------
+
+    private boolean isDirectAc3PlaybackSupported(int sampleRateHz) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return false;
+        }
+
+        try {
+            AudioFormat format = new AudioFormat.Builder()
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .setEncoding(AudioFormat.ENCODING_AC3)
+                    .setSampleRate(sampleRateHz)
+                    .build();
+
+            AudioAttributes attr = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+
+            return AudioTrack.isDirectPlaybackSupported(format, attr);
+        } catch (Exception e) {
+            Log.e("NATIVE_AC3", "isDirectAc3PlaybackSupported failed", e);
+            return false;
+        }
+    }
+
+    private void stopNativeAc3() {
+        if (nativeAc3Player != null) {
+            nativeAc3Player.stop();
+        }
+    }
+
+    // --------------------------------------
+    // Native AC3 direct player
+    // --------------------------------------
+
+    private static class NativeAc3Player {
+        private static final String TAG = "NativeAc3Player";
+
+        private AudioTrack audioTrack;
+        private Thread playbackThread;
+        private volatile boolean stopRequested = false;
+        private volatile boolean playing = false;
+        private String currentPath;
+        private int currentSampleRate = 48000;
+
+        synchronized void start(@NonNull String path, int sampleRateHz) throws Exception {
+            stop();
+
+            File file = new File(path);
+            if (!file.exists() || !file.isFile()) {
+                throw new IllegalArgumentException("AC3 file not found: " + path);
+            }
+
+            currentPath = path;
+            currentSampleRate = sampleRateHz;
+            stopRequested = false;
+
+            AudioFormat format = new AudioFormat.Builder()
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .setEncoding(AudioFormat.ENCODING_AC3)
+                    .setSampleRate(sampleRateHz)
+                    .build();
+
+            AudioAttributes attr = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+
+            int bufferSize = AudioTrack.getMinBufferSize(
+                    sampleRateHz,
+                    AudioFormat.CHANNEL_OUT_STEREO,
+                    AudioFormat.ENCODING_AC3
+            );
+            if (bufferSize <= 0) {
+                bufferSize = 64 * 1024;
+            } else {
+                bufferSize = Math.max(bufferSize, 64 * 1024);
+            }
+
+            audioTrack = new AudioTrack.Builder()
+                    .setAudioAttributes(attr)
+                    .setAudioFormat(format)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .setBufferSizeInBytes(bufferSize)
+                    .build();
+
+            if (audioTrack.getState() != AudioTrack.STATE_INITIALIZED) {
+                releaseTrack();
+                throw new IllegalStateException("Failed to initialize AudioTrack for AC3 direct playback");
+            }
+
+            audioTrack.play();
+            playing = true;
+
+            playbackThread = new Thread(() -> {
+                BufferedInputStream inputStream = null;
+                try {
+                    inputStream = new BufferedInputStream(new FileInputStream(currentPath));
+                    byte[] buffer = new byte[4096];
+
+                    while (!stopRequested) {
+                        int read = inputStream.read(buffer);
+                        if (read == -1) {
+                            break;
+                        }
+
+                        int written = 0;
+                        while (written < read && !stopRequested) {
+                            int n = audioTrack.write(buffer, written, read - written);
+                            if (n < 0) {
+                                throw new RuntimeException("AudioTrack write failed: " + n);
+                            }
+                            written += n;
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Native AC3 playback failed", e);
+                } finally {
+                    if (inputStream != null) {
+                        try {
+                            inputStream.close();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    releaseTrack();
+                    playing = false;
+                }
+            }, "NativeAc3PlaybackThread");
+
+            playbackThread.start();
+        }
+
+        synchronized void stop() {
+            stopRequested = true;
+
+            if (playbackThread != null) {
+                try {
+                    playbackThread.interrupt();
+                    playbackThread.join(500);
+                } catch (Exception ignored) {
+                }
+                playbackThread = null;
+            }
+
+            releaseTrack();
+            playing = false;
+        }
+
+        synchronized boolean isPlaying() {
+            return playing;
+        }
+
+        private void releaseTrack() {
+            if (audioTrack != null) {
+                try {
+                    audioTrack.pause();
+                } catch (Exception ignored) {
+                }
+                try {
+                    audioTrack.flush();
+                } catch (Exception ignored) {
+                }
+                try {
+                    audioTrack.stop();
+                } catch (Exception ignored) {
+                }
+                try {
+                    audioTrack.release();
+                } catch (Exception ignored) {
+                }
+                audioTrack = null;
+            }
+        }
     }
 
     @Nullable

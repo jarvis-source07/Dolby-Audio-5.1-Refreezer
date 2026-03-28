@@ -24,7 +24,6 @@ import '../settings.dart';
 import '../translations.i18n.dart';
 import '../ui/android_auto.dart';
 import '../utils/mediaitem_converter.dart';
-import '../utils/surround_source_resolver.dart';
 
 Future<AudioPlayerHandler> initAudioService() async {
   return await AudioService.init(
@@ -46,6 +45,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   AudioPlayerHandler() {
     _init();
   }
+
+  static const MethodChannel _nativeChannel =
+      MethodChannel('r.r.refreezer/native');
 
   int? _audioSession;
   int? _prevAudioSession;
@@ -84,6 +86,25 @@ class AudioPlayerHandler extends BaseAudioHandler
 
   int currentIndex = 0;
   int _requestedIndex = -1;
+
+  // ----------------------------
+  // Native AC3 playback state
+  // ----------------------------
+
+  bool _nativeAc3Active = false;
+  bool _desiredPlaying = false;
+  bool _nativeBypassForCurrentTrack = false;
+  String? _nativeTrackId;
+  Duration _nativeBasePosition = Duration.zero;
+  DateTime? _nativeStartedAt;
+  Timer? _nativeProgressTimer;
+
+  Duration get _nativeEstimatedPosition {
+    if (_nativeStartedAt == null) {
+      return _nativeBasePosition;
+    }
+    return _nativeBasePosition.add(DateTime.now().difference(_nativeStartedAt!));
+  }
 
   Future<void> _init() async {
     await _startSession();
@@ -150,7 +171,13 @@ class AudioPlayerHandler extends BaseAudioHandler
 
         return (queueIndex < queue.length) ? queue[queueIndex] : null;
       },
-    ).whereType<MediaItem>().distinct().listen((item) {
+    ).whereType<MediaItem>().distinct().listen((item) async {
+      // New item => native per-track bypass reset if track changed
+      if (_nativeTrackId != item.id) {
+        _nativeBypassForCurrentTrack = false;
+        _nativeBasePosition = Duration.zero;
+      }
+
       mediaItem.add(item);
 
       final int queueIndex = queue.value.indexOf(item);
@@ -163,6 +190,17 @@ class AudioPlayerHandler extends BaseAudioHandler
 
       _saveQueueToFile();
       _addToHistory(item);
+
+      // If user was in playing state and switched track while native was active,
+      // stop native and start new track according to current mode.
+      if (_desiredPlaying &&
+          _nativeAc3Active &&
+          _nativeTrackId != null &&
+          _nativeTrackId != item.id) {
+        await _stopNativeAc3(updateState: false);
+        await Future.delayed(const Duration(milliseconds: 120));
+        await _playCurrentAccordingToMode();
+      }
     });
 
     // Propagate all events from the audio player to AudioService clients.
@@ -174,7 +212,11 @@ class AudioPlayerHandler extends BaseAudioHandler
 
     _player.loopModeStream.listen((_) => _broadcastState(_player.playbackEvent));
 
-    _player.processingStateStream.listen((state) {
+    _player.processingStateStream.listen((state) async {
+      if (_nativeAc3Active) {
+        return;
+      }
+
       if (state == ProcessingState.completed && _player.playing) {
         stop();
         _player.seek(Duration.zero, index: 0);
@@ -226,13 +268,35 @@ class AudioPlayerHandler extends BaseAudioHandler
 
   @override
   Future<void> play() async {
-    await _player.play();
+    _desiredPlaying = true;
+    await _playCurrentAccordingToMode();
 
     // Scrobble to LastFM / add to history if new track
     MediaItem? newMediaItem = mediaItem.value;
     if (newMediaItem != null && newMediaItem.id != _loggedTrackId) {
       await _addToHistory(newMediaItem);
     }
+  }
+
+  Future<void> _playCurrentAccordingToMode() async {
+    final currentItem = mediaItem.value;
+    if (currentItem == null) {
+      await _player.play();
+      return;
+    }
+
+    // Try native AC3 first if surround mode enabled and current track not bypassed.
+    final bool nativeStarted =
+        !_nativeBypassForCurrentTrack && await _tryStartNativeAc3(currentItem);
+
+    if (nativeStarted) {
+      return;
+    }
+
+    // Fallback to normal just_audio playback.
+    await _stopNativeAc3(updateState: false);
+    await _player.setVolume(1.0);
+    await _player.play();
   }
 
   @override
@@ -247,11 +311,17 @@ class AudioPlayerHandler extends BaseAudioHandler
 
     final index = queue.value.indexWhere((item) => item.id == mediaId);
     if (index != -1) {
+      await _stopNativeAc3(updateState: false);
+      _nativeBypassForCurrentTrack = false;
       await _player.seek(
         Duration.zero,
         index:
             _player.shuffleModeEnabled ? _player.shuffleIndices![index] : index,
       );
+      if (_desiredPlaying) {
+        await Future.delayed(const Duration(milliseconds: 120));
+        await _playCurrentAccordingToMode();
+      }
     } else {
       Logger.root.severe('playFromMediaId: MediaItem not found');
     }
@@ -259,13 +329,25 @@ class AudioPlayerHandler extends BaseAudioHandler
 
   @override
   Future<void> pause() async {
+    _desiredPlaying = false;
+
+    if (_nativeAc3Active) {
+      _nativeBasePosition = _nativeEstimatedPosition;
+      _nativeBypassForCurrentTrack = true;
+      await _stopNativeAc3(updateState: false);
+      _broadcastNativeState(isPlaying: false);
+      return;
+    }
+
     await _player.pause();
   }
 
   @override
   Future<void> stop() async {
+    _desiredPlaying = false;
     Logger.root.info('saving queue');
     await _saveQueueToFile();
+    await _stopNativeAc3(updateState: false);
     Logger.root.info('stopping player');
     await _player.stop();
     await super.stop();
@@ -336,14 +418,36 @@ class AudioPlayerHandler extends BaseAudioHandler
   }
 
   @override
-  Future<void> skipToNext() => _player.seekToNext();
+  Future<void> skipToNext() async {
+    final wasPlaying = _desiredPlaying;
+    await _stopNativeAc3(updateState: false);
+    _nativeBypassForCurrentTrack = false;
+    await _player.seekToNext();
+    if (wasPlaying) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      await _playCurrentAccordingToMode();
+    } else {
+      _broadcastState(_player.playbackEvent);
+    }
+  }
 
   @override
   Future<void> skipToPrevious() async {
+    final wasPlaying = _desiredPlaying;
+    await _stopNativeAc3(updateState: false);
+    _nativeBypassForCurrentTrack = false;
+
     if ((_player.position.inSeconds) <= 5) {
       await _player.seekToPrevious();
     } else {
       await _player.seek(Duration.zero);
+    }
+
+    if (wasPlaying) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      await _playCurrentAccordingToMode();
+    } else {
+      _broadcastState(_player.playbackEvent);
     }
   }
 
@@ -351,15 +455,38 @@ class AudioPlayerHandler extends BaseAudioHandler
   Future<void> skipToQueueItem(int index) async {
     if (index < 0 || index >= _playlist.children.length) return;
 
+    final wasPlaying = _desiredPlaying;
+    await _stopNativeAc3(updateState: false);
+    _nativeBypassForCurrentTrack = false;
+
     await _player.seek(
       Duration.zero,
       index:
           _player.shuffleModeEnabled ? _player.shuffleIndices![index] : index,
     );
+
+    if (wasPlaying) {
+      await Future.delayed(const Duration(milliseconds: 120));
+      await _playCurrentAccordingToMode();
+    } else {
+      _broadcastState(_player.playbackEvent);
+    }
   }
 
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    if (_nativeAc3Active || settings.playbackMode == PlaybackMode.surround) {
+      // Native raw AC3 path does not support practical accurate seeking here.
+      // So current track falls back to just_audio from the new position.
+      _nativeBypassForCurrentTrack = true;
+      await _stopNativeAc3(updateState: false);
+      await _player.seek(position);
+      _broadcastState(_player.playbackEvent);
+      return;
+    }
+
+    await _player.seek(position);
+  }
 
   @override
   Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
@@ -448,6 +575,11 @@ class AudioPlayerHandler extends BaseAudioHandler
 
   /// Broadcast the current state to all clients.
   void _broadcastState(PlaybackEvent event) {
+    if (_nativeAc3Active) {
+      _broadcastNativeState(isPlaying: true);
+      return;
+    }
+
     final playing = _player.playing;
     currentIndex = _getQueueIndex(
       _player.currentIndex ?? 0,
@@ -488,26 +620,194 @@ class AudioPlayerHandler extends BaseAudioHandler
     );
   }
 
-  /// Resolve effective queue index taking shuffle mode into account.
-  int _getQueueIndex(int currentIndex, {bool shuffleModeEnabled = false}) {
-    final effectiveIndices = _player.effectiveIndices ?? [];
-    final shuffleIndicesInv = List.filled(effectiveIndices.length, 0);
+  void _broadcastNativeState({required bool isPlaying}) {
+    currentIndex = _getQueueIndex(
+      _player.currentIndex ?? 0,
+      shuffleModeEnabled: _player.shuffleModeEnabled,
+    );
 
-    for (var i = 0; i < effectiveIndices.length; i++) {
-      shuffleIndicesInv[effectiveIndices[i]] = i;
-    }
-
-    return (shuffleModeEnabled && (currentIndex < shuffleIndicesInv.length))
-        ? shuffleIndicesInv[currentIndex]
-        : currentIndex;
+    playbackState.add(
+      playbackState.value.copyWith(
+        controls: [
+          MediaControl.skipToPrevious,
+          if (isPlaying) MediaControl.pause else MediaControl.play,
+          MediaControl.skipToNext,
+          const MediaControl(
+            androidIcon: 'drawable/ic_action_stop',
+            label: 'stop',
+            action: MediaAction.stop,
+          ),
+        ],
+        systemActions: const {
+          MediaAction.seek,
+          MediaAction.seekForward,
+          MediaAction.seekBackward,
+        },
+        androidCompactActionIndices: const [0, 1, 2],
+        processingState:
+            isPlaying ? AudioProcessingState.ready : AudioProcessingState.ready,
+        playing: isPlaying,
+        updatePosition: _nativeEstimatedPosition,
+        bufferedPosition: _nativeEstimatedPosition,
+        speed: 1.0,
+        queueIndex: currentIndex,
+      ),
+    );
   }
 
-  Future<void> _loadEmptyPlaylist() async {
+  void _startNativeProgressTicker() {
+    _nativeProgressTimer?.cancel();
+    _nativeProgressTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (_) async {
+      if (!_nativeAc3Active) return;
+
+      _broadcastNativeState(isPlaying: true);
+
+      final item = mediaItem.value;
+      final duration = item?.duration;
+      if (duration != null && _nativeEstimatedPosition >= duration) {
+        Logger.root.info('Native AC3 playback reached track duration');
+        await _stopNativeAc3(updateState: false);
+        _desiredPlaying = false;
+        playbackState.add(
+          playbackState.value.copyWith(
+            playing: false,
+            processingState: AudioProcessingState.completed,
+            updatePosition: duration,
+            bufferedPosition: duration,
+          ),
+        );
+      }
+    });
+  }
+
+  Future<bool> _tryStartNativeAc3(MediaItem currentItem) async {
+    if (settings.playbackMode != PlaybackMode.surround) {
+      return false;
+    }
+
+    if (_nativeBypassForCurrentTrack) {
+      Logger.root.info(
+        'Native AC3 bypass enabled for current track ${currentItem.id}, using normal playback.',
+      );
+      return false;
+    }
+
+    bool directSupported = false;
     try {
-      Logger.root.info('Loading empty playlist...');
-      await _player.setAudioSource(_playlist);
-    } catch (e) {
-      Logger.root.severe('Error loading empty playlist: $e');
+      directSupported = await _nativeChannel.invokeMethod<bool>(
+            'isDirectAc3PlaybackSupported',
+            <String, dynamic>{'sampleRateHz': 48000},
+          ) ??
+          false;
+    } catch (e, st) {
+      Logger.root.warning(
+        'Direct AC3 playback support check failed',
+        e,
+        st,
+      );
+      directSupported = false;
+    }
+
+    if (!directSupported) {
+      Logger.root.info(
+        'Direct AC3 playback is not supported for current route/device.',
+      );
+      return false;
+    }
+
+    String? ac3Path = await _getSurroundArtifactPath(
+      currentItem,
+      extension: 'ac3',
+    );
+
+    if (ac3Path == null) {
+      final String? originalUrl = await _getTrackUrl(currentItem);
+      if (originalUrl == null) {
+        return false;
+      }
+
+      final bool generated = await _generateSurroundNow(
+        currentItem,
+        originalUrl,
+        outputMode: 'ac3',
+      );
+
+      if (generated) {
+        ac3Path = await _getSurroundArtifactPath(
+          currentItem,
+          extension: 'ac3',
+        );
+      }
+    }
+
+    if (ac3Path == null) {
+      Logger.root.info(
+        'No AC3 surround artifact available for ${currentItem.id}, using normal playback.',
+      );
+      return false;
+    }
+
+    try {
+      await _player.pause();
+      await _player.setVolume(0.0);
+
+      final bool started = await _nativeChannel.invokeMethod<bool>(
+            'playNativeAc3',
+            <String, dynamic>{
+              'path': ac3Path,
+              'sampleRateHz': 48000,
+            },
+          ) ??
+          false;
+
+      if (!started) {
+        return false;
+      }
+
+      _nativeAc3Active = true;
+      _nativeTrackId = currentItem.id;
+      _nativeStartedAt = DateTime.now();
+      // If this is a fresh surround start, begin from zero.
+      _nativeBasePosition = Duration.zero;
+
+      _startNativeProgressTicker();
+      _broadcastNativeState(isPlaying: true);
+
+      Logger.root.info(
+        'Native AC3 playback started for ${currentItem.id}: $ac3Path',
+      );
+
+      return true;
+    } catch (e, st) {
+      Logger.root.warning(
+        'playNativeAc3 failed for ${currentItem.id}',
+        e,
+        st,
+      );
+      await _stopNativeAc3(updateState: false);
+      return false;
+    }
+  }
+
+  Future<void> _stopNativeAc3({bool updateState = true}) async {
+    _nativeProgressTimer?.cancel();
+    _nativeProgressTimer = null;
+
+    if (_nativeAc3Active) {
+      try {
+        await _nativeChannel.invokeMethod('stopNativeAc3');
+      } catch (e, st) {
+        Logger.root.warning('stopNativeAc3 failed', e, st);
+      }
+    }
+
+    _nativeAc3Active = false;
+    _nativeTrackId = null;
+    _nativeStartedAt = null;
+
+    if (updateState) {
+      _broadcastState(_player.playbackEvent);
     }
   }
 
@@ -548,57 +848,62 @@ class AudioPlayerHandler extends BaseAudioHandler
       return originalUri;
     }
 
-    final String? surroundTsPath = await _getSurroundTsPath(mediaItem);
-
-    final Uri resolvedUri = SurroundSourceResolver.resolve(
-      originalUri: originalUri,
-      playbackMode: settings.playbackMode,
-      surroundTsPath: surroundTsPath,
+    // just_audio remains queue/session shell.
+    // Even in surround mode we keep original source loaded here and route
+    // actual sound through native AC3 playback when available.
+    final String? ac3Path = await _getSurroundArtifactPath(
+      mediaItem,
+      extension: 'ac3',
     );
 
     Logger.root.info(
-      'Resolved source for ${mediaItem.id} => $resolvedUri '
-      '(mode=${settings.playbackMode.name}, surroundTsPath=$surroundTsPath)',
+      'Resolved source for ${mediaItem.id} => $originalUri '
+      '(mode=${settings.playbackMode.name}, surroundAc3Path=$ac3Path, nativeShell=true)',
     );
 
-    return resolvedUri;
+    return originalUri;
   }
 
-  Future<String?> _getSurroundTsPath(MediaItem mediaItem) async {
+  Future<String?> _getSurroundArtifactPath(
+    MediaItem mediaItem, {
+    required String extension,
+  }) async {
     // 1) Direct path from MediaItem extras (best option)
     final dynamic extraPath = mediaItem.extras?['surroundTsPath'];
-    if (extraPath is String && extraPath.trim().isNotEmpty) {
+    if (extraPath is String &&
+        extraPath.trim().isNotEmpty &&
+        extraPath.toLowerCase().endsWith('.$extension')) {
       final file = File(extraPath);
       if (await file.exists()) {
         return file.path;
       }
     }
 
-    // 2) tempDir/surround/<trackId>.ts
+    // 2) tempDir/surround/<trackId>.<ext>
     try {
       final tempDir = await getTemporaryDirectory();
-      final tempPath = p.join(tempDir.path, 'surround', '${mediaItem.id}.ts');
+      final tempPath = p.join(tempDir.path, 'surround', '${mediaItem.id}.$extension');
       final tempFile = File(tempPath);
       if (await tempFile.exists()) {
         return tempFile.path;
       }
     } catch (_) {}
 
-    // 3) docsDir/surround/<trackId>.ts
+    // 3) docsDir/surround/<trackId>.<ext>
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final docsPath = p.join(docsDir.path, 'surround', '${mediaItem.id}.ts');
+      final docsPath = p.join(docsDir.path, 'surround', '${mediaItem.id}.$extension');
       final docsFile = File(docsPath);
       if (await docsFile.exists()) {
         return docsFile.path;
       }
     } catch (_) {}
 
-    // 4) external app dir/surround/<trackId>.ts
+    // 4) external app dir/surround/<trackId>.<ext>
     try {
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
-        final extPath = p.join(extDir.path, 'surround', '${mediaItem.id}.ts');
+        final extPath = p.join(extDir.path, 'surround', '${mediaItem.id}.$extension');
         final extFile = File(extPath);
         if (await extFile.exists()) {
           return extFile.path;
@@ -606,7 +911,84 @@ class AudioPlayerHandler extends BaseAudioHandler
       }
     } catch (_) {}
 
+    // 5) ask native side too
+    try {
+      final String? nativeFound =
+          await _nativeChannel.invokeMethod<String>('findExistingSurroundPath', {
+        'trackId': mediaItem.id,
+        'extension': extension,
+      });
+
+      if (nativeFound != null && nativeFound.trim().isNotEmpty) {
+        final file = File(nativeFound);
+        if (await file.exists()) {
+          return file.path;
+        }
+      }
+    } catch (e, st) {
+      Logger.root.warning(
+        'Native surround lookup failed for ${mediaItem.id}.$extension',
+        e,
+        st,
+      );
+    }
+
     return null;
+  }
+
+  Future<bool> _generateSurroundNow(
+    MediaItem mediaItem,
+    String inputPath, {
+    String outputMode = 'ac3',
+  }) async {
+    try {
+      Logger.root.info(
+        'No surround artifact found for ${mediaItem.id}, generating now from input: $inputPath (outputMode=$outputMode)',
+      );
+
+      final dynamic raw = await _nativeChannel.invokeMethod(
+        'generateSurroundNow',
+        <String, dynamic>{
+          'trackId': mediaItem.id,
+          'inputPath': inputPath,
+          'outputMode': outputMode,
+          'preset': 'balanced',
+          'overwrite': true,
+          'persistent': true,
+          'debugPassthrough': false,
+          'bitrateKbps': 448,
+          'sampleRateHz': 48000,
+          'outputChannels': 6,
+        },
+      );
+
+      final Map<dynamic, dynamic>? result =
+          raw is Map ? raw as Map<dynamic, dynamic> : null;
+
+      Logger.root.info(
+        'generateSurroundNow result for ${mediaItem.id}: $result',
+      );
+
+      final bool success = result?['success'] == true;
+      if (!success) {
+        return false;
+      }
+
+      final String? outputPath = result?['outputPath']?.toString();
+      if (outputPath == null || outputPath.trim().isEmpty) {
+        return false;
+      }
+
+      final file = File(outputPath);
+      return await file.exists() && await file.length() > 0;
+    } catch (e, st) {
+      Logger.root.warning(
+        'generateSurroundNow failed for ${mediaItem.id}',
+        e,
+        st,
+      );
+      return false;
+    }
   }
 
   Future<String?> _getTrackUrl(MediaItem mediaItem) async {
@@ -715,8 +1097,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   Future<void> reloadQueueForPlaybackModeChange() async {
     if (queue.value.isEmpty) return;
 
-    final bool wasPlaying = _player.playing;
-    final Duration currentPosition = _player.position;
+    final bool wasPlaying = _desiredPlaying;
+    final Duration currentPosition =
+        _nativeAc3Active ? _nativeEstimatedPosition : _player.position;
     final int queueIndex = playbackState.value.queueIndex ?? currentIndex;
 
     Logger.root.info(
@@ -724,6 +1107,8 @@ class AudioPlayerHandler extends BaseAudioHandler
     );
 
     await pause();
+    _nativeBypassForCurrentTrack = false;
+
     await _loadQueueAtIndex(
       queue.value,
       queueIndex,
@@ -788,7 +1173,7 @@ class AudioPlayerHandler extends BaseAudioHandler
   }
 
   Future<void> _addToHistory(MediaItem item) async {
-    if (!_player.playing) return;
+    if (!playbackState.value.playing) return;
 
     if (_scrobblenautReady && !(_loggedTrackId == item.id)) {
       Logger.root.info('scrobbling track ${item.id} to recently LastFM');
@@ -829,7 +1214,10 @@ class AudioPlayerHandler extends BaseAudioHandler
             (mi) => MediaItemConverter.mediaItemToMap(mi),
           )
           .toList(),
-      'position': _player.position.inMilliseconds,
+      'position': (_nativeAc3Active
+              ? _nativeEstimatedPosition
+              : _player.position)
+          .inMilliseconds,
       'queueSource': (queueSource ?? QueueSource()).toJson(),
       'loopMode': LoopMode.values.indexOf(_player.loopMode),
     };
@@ -955,14 +1343,14 @@ class AudioPlayerHandler extends BaseAudioHandler
   }
 
   Future<void> updateQueueQuality() async {
-    if (_player.playing) {
+    if (_desiredPlaying) {
       await pause();
       await _loadQueueAtIndex(
         queue.value,
         playbackState.value.queueIndex ?? 0,
         position: _player.position,
       );
-      await _player.play();
+      await play();
     } else {
       await _loadQueueAtIndex(
         queue.value,

@@ -98,7 +98,7 @@ public class DownloadService extends Service {
         DownloadsDatabase dbHelper = new DownloadsDatabase(getApplicationContext());
         db = dbHelper.getWritableDatabase();
 
-        // Prepare future surround directories
+        // Prepare surround directories
         ensureSurroundDirectories();
     }
 
@@ -643,7 +643,8 @@ public class DownloadService extends Service {
                 }
             }
 
-            // Generate surround artifact if enabled and possible
+            // Generate surround AC3 artifact after the original file is ready.
+            // This is cache-generation and should never fail the original download.
             maybeGenerateSurroundArtifact(download, outFile);
 
             download.state = Download.DownloadState.DONE;
@@ -716,45 +717,58 @@ public class DownloadService extends Service {
     }
 
     /**
-     * Try generating a surround transport artifact (.ts) from the finished audio file.
+     * Generate a surround AC3 artifact from the finished audio file.
      *
-     * Current behavior:
-     * - safe no-op if surround mode disabled
-     * - safe no-op if ffmpeg binary not found
-     * - safe no-op if source file missing
-     * - logs success/failure but never fails the original download
+     * Important:
+     * - This should never fail the original download
+     * - AC3 is the PRIMARY generated artifact
+     * - TS can be generated later/on-demand if ever needed, but not here
      */
     private void maybeGenerateSurroundArtifact(Download download, File sourceFile) {
         try {
-            if (settings == null) {
-                return;
-            }
+            Log.i("SURROUND", "maybeGenerateSurroundArtifact called");
 
-            if (!settings.isSurroundEnabled()) {
+            if (settings == null) {
+                Log.w("SURROUND", "Skipping surround generation: settings == null");
                 return;
             }
 
             if (download == null || download.trackId == null || download.trackId.trim().isEmpty()) {
+                Log.w("SURROUND", "Skipping surround generation: invalid download/trackId");
                 return;
             }
 
             if (sourceFile == null || !sourceFile.exists() || !sourceFile.isFile()) {
                 logger.warn("Skipping surround generation, source file missing", download);
+                Log.w("SURROUND", "Skipping surround generation: source missing");
                 return;
             }
 
             String ffmpegPath = resolveFfmpegBinaryPath();
             if (ffmpegPath == null || ffmpegPath.trim().isEmpty()) {
-                logger.warn("Skipping surround generation, ffmpeg binary not found", download);
+                logger.warn("Skipping surround generation, ffmpeg path unavailable", download);
+                Log.w("SURROUND", "Skipping surround generation: ffmpeg path unavailable");
                 return;
             }
 
-            File surroundOutput = getSurroundOutputFile(download.trackId, true);
+            File surroundOutput = getSurroundOutputFile(download.trackId, true, "ac3");
             if (surroundOutput == null) {
                 logger.warn("Skipping surround generation, surround output path unavailable", download);
+                Log.w("SURROUND", "Skipping surround generation: output path unavailable");
                 return;
             }
 
+            Log.i(
+                    "SURROUND",
+                    "Generating AC3 surround for trackId=" + download.trackId
+                            + ", source=" + sourceFile.getAbsolutePath()
+                            + ", sourceSize=" + sourceFile.length()
+                            + ", out=" + surroundOutput.getAbsolutePath()
+                            + ", preset=" + settings.surroundPreset
+                            + ", playbackMode=" + settings.playbackMode
+            );
+
+            // Delete old AC3/TS artifacts for this track before regenerating.
             deleteSurroundArtifacts(download.trackId);
 
             FFmpegSurroundProcessor processor = new FFmpegSurroundProcessor(ffmpegPath);
@@ -765,7 +779,7 @@ public class DownloadService extends Service {
                                     .setTrackId(download.trackId)
                                     .setInputPath(sourceFile.getAbsolutePath())
                                     .setOutputPath(surroundOutput.getAbsolutePath())
-                                    .setOutputMode(SurroundProcessor.OutputMode.TS)
+                                    .setOutputMode(SurroundProcessor.OutputMode.AC3)
                                     .setPreset(
                                             SurroundProcessor.Preset.fromString(settings.surroundPreset)
                                     )
@@ -777,14 +791,26 @@ public class DownloadService extends Service {
                                     .build()
                     );
 
-            if (result.success) {
+            boolean fileOk = surroundOutput.exists() && surroundOutput.length() > 0;
+
+            Log.i(
+                    "SURROUND",
+                    "AC3 surround result trackId=" + download.trackId
+                            + ", success=" + result.success
+                            + ", fileOk=" + fileOk
+                            + ", outExists=" + surroundOutput.exists()
+                            + ", outSize=" + (surroundOutput.exists() ? surroundOutput.length() : -1)
+                            + ", error=" + result.error
+            );
+
+            if (result.success && fileOk) {
                 logger.warn(
-                        "Surround artifact generated: " + surroundOutput.getAbsolutePath(),
+                        "Surround AC3 artifact generated: " + surroundOutput.getAbsolutePath(),
                         download
                 );
             } else {
                 logger.warn(
-                        "Surround generation failed: " + result.error,
+                        "Surround AC3 generation failed: " + result.error,
                         download
                 );
             }
@@ -796,22 +822,11 @@ public class DownloadService extends Service {
 
     /**
      * Resolve ffmpeg executable path.
-     *
-     * Current search order:
-     * 1) app files dir /ffmpeg
-     * 2) app files dir /bin/ffmpeg
-     * 3) app cache dir /ffmpeg
-     *
-     * If none found, returns null and surround generation is skipped.
+     * FFmpegKit is bundled through the local AAR, so no external binary path is required.
      */
     @Nullable
     private String resolveFfmpegBinaryPath() {
-      // FFmpegKit is bundled through AAR, no external binary path required.
-      return "ffmpeg-kit";
-    }
-
-    private boolean isExecutableFile(File file) {
-      return true;
+        return "ffmpeg-kit";
     }
 
     // 500ms loop to update notifications and UI
@@ -937,6 +952,13 @@ public class DownloadService extends Service {
                     if (settings != null) {
                         deezer.arl = settings.arl;
                         deezer.contentLanguage = settings.deezerLanguage;
+
+                        Log.i(
+                                "SURROUND",
+                                "Settings update: playbackMode=" + settings.playbackMode
+                                        + ", surroundPreset=" + settings.surroundPreset
+                                        + ", downloadThreads=" + settings.downloadThreads
+                        );
                     }
                     break;
 
@@ -1044,9 +1066,9 @@ public class DownloadService extends Service {
         }
     }
 
-    // ----------------------------
-    // Future surround helper methods
-    // ----------------------------
+    // --------------------------------------
+    // Surround helper methods
+    // --------------------------------------
 
     @Nullable
     private File getFlutterDocumentsBaseDir() {
@@ -1089,36 +1111,43 @@ public class DownloadService extends Service {
     }
 
     @Nullable
-    private File getSurroundOutputFile(@Nullable String trackId, boolean persistent) {
+    private File getSurroundOutputFile(
+            @Nullable String trackId,
+            boolean persistent,
+            @Nullable String extension
+    ) {
         if (trackId == null || trackId.trim().isEmpty()) return null;
 
         File surroundDir = getSurroundDirectory(persistent);
         if (surroundDir == null) return null;
 
-        return new File(surroundDir, trackId + ".ts");
+        String ext = (extension == null || extension.trim().isEmpty()) ? "ac3" : extension.trim();
+        return new File(surroundDir, trackId + "." + ext);
     }
 
     private void deleteSurroundArtifacts(@Nullable String trackId) {
         if (trackId == null || trackId.trim().isEmpty()) return;
 
-        try {
-            File temp = getSurroundOutputFile(trackId, false);
-            if (temp != null && temp.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                temp.delete();
-            }
-        } catch (Exception e) {
-            Log.w("SURROUND", "Failed deleting temp surround artifact", e);
-        }
+        deleteSurroundArtifact(trackId, false, "ac3");
+        deleteSurroundArtifact(trackId, true, "ac3");
 
+        deleteSurroundArtifact(trackId, false, "ts");
+        deleteSurroundArtifact(trackId, true, "ts");
+    }
+
+    private void deleteSurroundArtifact(
+            @Nullable String trackId,
+            boolean persistent,
+            @NonNull String extension
+    ) {
         try {
-            File persistent = getSurroundOutputFile(trackId, true);
-            if (persistent != null && persistent.exists()) {
+            File file = getSurroundOutputFile(trackId, persistent, extension);
+            if (file != null && file.exists()) {
                 //noinspection ResultOfMethodCallIgnored
-                persistent.delete();
+                file.delete();
             }
         } catch (Exception e) {
-            Log.w("SURROUND", "Failed deleting persistent surround artifact", e);
+            Log.w("SURROUND", "Failed deleting surround artifact " + extension, e);
         }
     }
 
@@ -1142,7 +1171,7 @@ public class DownloadService extends Service {
         String deezerCountry = "US";
         SelectedTags tags;
 
-        // Future surround playback settings
+        // Surround-related settings
         String playbackMode = "normal";
         String surroundPreset = "balanced";
 

@@ -53,10 +53,6 @@ android {
         targetSdk 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
-
-        // IMPORTANT:
-        // Do NOT set abiFilters here when using:
-        // flutter build apk --release --split-per-abi
     }
 
     signingConfigs {
@@ -115,12 +111,6 @@ repositories {
 dependencies {
     // Local FFmpeg Kit AAR
     implementation(name: "ffmpeg-kit-lts-ndk-r25-16k", ext: "aar")
-
-    // Existing local AAR
-    implementation files('libs/extension-flac.aar')
-    
-    implementation "com.google.android.exoplayer:exoplayer:2.19.1"
-    
 
     implementation("androidx.activity:activity-ktx:1.10.1")
 
