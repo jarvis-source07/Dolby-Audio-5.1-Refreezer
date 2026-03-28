@@ -34,6 +34,10 @@ class Settings {
   @JsonKey(defaultValue: false)
   late bool enableEqualizer;
 
+  //Playback mode
+  @JsonKey(defaultValue: PlaybackMode.normal)
+  late PlaybackMode playbackMode;
+
   //Account
   String? arl;
   @JsonKey(includeFromJson: false)
@@ -249,6 +253,23 @@ class Settings {
     //await GetIt.I<AudioPlayerHandler>().customAction(
     //    'updateQuality', {'mobileQuality': getQualityInt(mobileQuality), 'wifiQuality': getQualityInt(wifiQuality)});
   }
+
+  bool get isSurroundMode => playbackMode == PlaybackMode.surround;
+
+  Future<void> setPlaybackMode(PlaybackMode mode) async {
+  playbackMode = mode;
+  await save();
+
+  try {
+    await GetIt.I<AudioPlayerHandler>().reloadQueueForPlaybackModeChange();
+  } catch (e, st) {
+    Logger.root.warning(
+      'Failed to reload queue after playback mode change: $e',
+      e,
+      st,
+    );
+  }
+}
 
   //AudioQuality to deezer int
   int getQualityInt(AudioQuality q) {
@@ -480,7 +501,9 @@ class Settings {
                 return null;
               }),
             ),
-            bottomAppBarTheme: const BottomAppBarTheme(color: deezerBottom), dialogTheme: DialogThemeData(backgroundColor: deezerBottom)),
+            bottomAppBarTheme: const BottomAppBarTheme(color: deezerBottom),
+            dialogTheme:
+                const DialogThemeData(backgroundColor: deezerBottom)),
         Themes.Black: ThemeData(
             useMaterial3: false,
             brightness: Brightness.dark,
@@ -544,7 +567,9 @@ class Settings {
                 return null;
               }),
             ),
-            bottomAppBarTheme: const BottomAppBarTheme(color: Colors.black), dialogTheme: DialogThemeData(backgroundColor: Colors.black))
+            bottomAppBarTheme: const BottomAppBarTheme(color: Colors.black),
+            dialogTheme:
+                const DialogThemeData(backgroundColor: Colors.black))
       };
 
   Future<String> getPath() async =>
@@ -557,6 +582,8 @@ class Settings {
 }
 
 enum AudioQuality { MP3_128, MP3_320, FLAC, ASK }
+
+enum PlaybackMode { normal, surround }
 
 enum Themes { Light, Dark, Deezer, Black }
 
