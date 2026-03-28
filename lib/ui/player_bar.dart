@@ -1,7 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get_it/get_it.dart';
 
 import '../service/audio_service.dart';
@@ -39,43 +38,10 @@ class _PlayerBarState extends State<PlayerBar> {
         GetIt.I<AudioPlayerHandler>().mediaItem.value!.duration!.inSeconds;
   }
 
-  Future<void> _togglePlaybackMode() async {
-    final nextMode = settings.playbackMode == PlaybackMode.normal
-        ? PlaybackMode.surround
-        : PlaybackMode.normal;
-
-    await settings.setPlaybackMode(nextMode);
-
-    if (mounted) {
-      setState(() {});
-    }
-
-    Fluttertoast.showToast(
-      msg: nextMode == PlaybackMode.normal
-          ? 'Playback mode: Normal'.i18n
-          : 'Playback mode: Surround'.i18n,
-      gravity: ToastGravity.BOTTOM,
-      toastLength: Toast.LENGTH_SHORT,
-    );
-  }
-
-  Widget _modeButton(BuildContext context) {
-    final isSurround = settings.playbackMode == PlaybackMode.surround;
-
-    return IconButton(
-      tooltip: isSurround ? 'Surround'.i18n : 'Normal'.i18n,
-      icon: Icon(
-        isSurround ? Icons.surround_sound : Icons.music_note,
-        semanticLabel: isSurround ? 'Surround'.i18n : 'Normal'.i18n,
-      ),
-      iconSize: iconSize * 0.85,
-      onPressed: _togglePlaybackMode,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     var focusNode = FocusNode();
+
     return GestureDetector(
       key: UniqueKey(),
       onHorizontalDragEnd: (DragEndDetails details) async {
@@ -92,9 +58,12 @@ class _PlayerBarState extends State<PlayerBar> {
           // Swiped up
           Navigator.of(context)
               .push(SlideBottomRoute(widget: const PlayerScreen()));
-          SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-            systemNavigationBarColor: settings.themeData.scaffoldBackgroundColor,
-          ));
+          SystemChrome.setSystemUIOverlayStyle(
+            SystemUiOverlayStyle(
+              systemNavigationBarColor:
+                  settings.themeData.scaffoldBackgroundColor,
+            ),
+          );
         }
       },
       child: StreamBuilder(
@@ -106,6 +75,7 @@ class _PlayerBarState extends State<PlayerBar> {
               height: 0,
             );
           }
+
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -167,7 +137,6 @@ class _PlayerBarState extends State<PlayerBar> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        _modeButton(context),
                         PrevNextButton(
                           iconSize,
                           prev: true,
@@ -215,6 +184,7 @@ class PrevNextButton extends StatelessWidget {
       stream: GetIt.I<AudioPlayerHandler>().queueStateStream,
       builder: (context, snapshot) {
         final queueState = snapshot.data;
+
         if (!prev) {
           if (!(queueState?.hasNext ?? false)) {
             return IconButton(
@@ -226,6 +196,7 @@ class PrevNextButton extends StatelessWidget {
               onPressed: null,
             );
           }
+
           return IconButton(
             icon: Icon(
               Icons.skip_next,
@@ -235,6 +206,7 @@ class PrevNextButton extends StatelessWidget {
             onPressed: () => GetIt.I<AudioPlayerHandler>().skipToNext(),
           );
         }
+
         if (prev) {
           if (!(queueState?.hasPrevious ?? false)) {
             if (hidePrev) {
@@ -243,6 +215,7 @@ class PrevNextButton extends StatelessWidget {
                 width: 0,
               );
             }
+
             return IconButton(
               icon: Icon(
                 Icons.skip_previous,
@@ -252,6 +225,7 @@ class PrevNextButton extends StatelessWidget {
               onPressed: null,
             );
           }
+
           return IconButton(
             icon: Icon(
               Icons.skip_previous,
@@ -261,6 +235,7 @@ class PrevNextButton extends StatelessWidget {
             onPressed: () => GetIt.I<AudioPlayerHandler>().skipToPrevious(),
           );
         }
+
         return Container();
       },
     );

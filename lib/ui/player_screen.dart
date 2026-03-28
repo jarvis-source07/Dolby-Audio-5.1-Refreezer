@@ -201,68 +201,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-/// Playback mode switch
-class PlaybackModeToggle extends StatefulWidget {
-  final bool compact;
-  const PlaybackModeToggle({super.key, this.compact = false});
-
-  @override
-  State<PlaybackModeToggle> createState() => _PlaybackModeToggleState();
-}
-
-class _PlaybackModeToggleState extends State<PlaybackModeToggle> {
-  Future<void> _setMode(PlaybackMode mode) async {
-    if (settings.playbackMode == mode) return;
-
-    await settings.setPlaybackMode(mode);
-
-    if (mounted) {
-      setState(() {});
-    }
-
-    Fluttertoast.showToast(
-      msg: mode == PlaybackMode.normal
-          ? 'Playback mode: Normal'.i18n
-          : 'Playback mode: Surround'.i18n,
-      gravity: ToastGravity.BOTTOM,
-      toastLength: Toast.LENGTH_SHORT,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isCompact = widget.compact;
-    final double fontSize = isCompact ? 10.sp : 12.sp;
-    final double iconSize = isCompact ? 14.sp : 16.sp;
-
-    return Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      alignment: WrapAlignment.center,
-      children: [
-        ChoiceChip(
-          selected: settings.playbackMode == PlaybackMode.normal,
-          onSelected: (_) => _setMode(PlaybackMode.normal),
-          avatar: Icon(Icons.music_note, size: iconSize),
-          label: Text(
-            'Normal'.i18n,
-            style: TextStyle(fontSize: fontSize),
-          ),
-        ),
-        ChoiceChip(
-          selected: settings.playbackMode == PlaybackMode.surround,
-          onSelected: (_) => _setMode(PlaybackMode.surround),
-          avatar: Icon(Icons.surround_sound, size: iconSize),
-          label: Text(
-            'Surround'.i18n,
-            style: TextStyle(fontSize: fontSize),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 // Landscape
 class PlayerScreenHorizontal extends StatefulWidget {
   const PlayerScreenHorizontal({super.key});
@@ -360,8 +298,6 @@ class _PlayerScreenHorizontalState extends State<PlayerScreenHorizontal> {
                       color: Theme.of(context).primaryColor,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  const PlaybackModeToggle(compact: true),
                 ],
               ),
               Container(
@@ -508,8 +444,6 @@ class _PlayerScreenVerticalState extends State<PlayerScreenVertical> {
                 color: Theme.of(context).primaryColor,
               ),
             ),
-            const SizedBox(height: 8),
-            const PlaybackModeToggle(),
           ],
         ),
         const SeekBar(12.0),
@@ -836,7 +770,9 @@ class _PlaybackControlsState extends State<PlaybackControls> {
                 setState(() {
                   cache.libraryTracks?.add(audioHandler.mediaItem.value!.id);
                 });
-                await deezerAPI.addFavoriteTrack(audioHandler.mediaItem.value!.id);
+                await deezerAPI.addFavoriteTrack(
+                  audioHandler.mediaItem.value!.id,
+                );
                 await cache.save();
               }
             },

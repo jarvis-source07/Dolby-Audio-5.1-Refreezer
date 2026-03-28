@@ -136,7 +136,7 @@ class MenuSheet {
     );
   }
 
-  //Default track options
+  // Default track options
   void defaultTrackMenu(
     Track track, {
     required BuildContext context,
@@ -152,7 +152,6 @@ class MenuSheet {
       addToPlaylist(track, context),
       downloadTrack(track, context),
       offlineTrack(track, context),
-      playbackModeTile(context),
       shareTile('track', track.id ?? ''),
       playMix(track, context),
       showAlbum(track.album!, context),
@@ -364,7 +363,7 @@ class MenuSheet {
   // ALBUM
   //===================
 
-  //Default album options
+  // Default album options
   void defaultAlbumMenu(
     Album album, {
     required BuildContext context,
@@ -377,7 +376,6 @@ class MenuSheet {
           : libraryAlbum(album, context),
       downloadAlbum(album, context),
       offlineAlbum(album, context),
-      playbackModeTile(context),
       shareTile('album', album.id!),
       ...options
     ]);
@@ -456,7 +454,6 @@ class MenuSheet {
       (artist.library != null)
           ? removeArtist(artist, context, onRemove: onRemove)
           : favoriteArtist(artist, context),
-      playbackModeTile(context),
       shareTile('artist', artist.id!),
       ...options
     ]);
@@ -513,7 +510,6 @@ class MenuSheet {
           : addPlaylistLibrary(playlist, context),
       addPlaylistOffline(playlist, context),
       downloadPlaylist(playlist, context),
-      playbackModeTile(context),
       shareTile('playlist', playlist.id!),
       if (playlist.user?.id == deezerAPI.userId)
         editPlaylist(playlist, context: context, onUpdate: onUpdate),
@@ -610,7 +606,6 @@ class MenuSheet {
       shareTile('episode', e.id!),
       shareShow(s.id!),
       downloadExternalEpisode(e),
-      playbackModeTile(context),
       ...options
     ]);
   }
@@ -635,36 +630,6 @@ class MenuSheet {
   //===================
   // OTHER
   //===================
-
-  Widget playbackModeTile(BuildContext context) => ListTile(
-        title: Text(
-          settings.playbackMode == PlaybackMode.surround
-              ? 'Playback mode: Surround'.i18n
-              : 'Playback mode: Normal'.i18n,
-        ),
-        leading: Icon(
-          settings.playbackMode == PlaybackMode.surround
-              ? Icons.surround_sound
-              : Icons.music_note,
-        ),
-        onTap: () async {
-          final nextMode = settings.playbackMode == PlaybackMode.normal
-              ? PlaybackMode.surround
-              : PlaybackMode.normal;
-
-          await settings.setPlaybackMode(nextMode);
-
-          Fluttertoast.showToast(
-            msg: nextMode == PlaybackMode.normal
-                ? 'Playback mode: Normal'.i18n
-                : 'Playback mode: Surround'.i18n,
-            gravity: ToastGravity.BOTTOM,
-            toastLength: Toast.LENGTH_SHORT,
-          );
-
-          if (context.mounted) _close(context);
-        },
-      );
 
   showDownloadStartedToast() {
     Fluttertoast.showToast(

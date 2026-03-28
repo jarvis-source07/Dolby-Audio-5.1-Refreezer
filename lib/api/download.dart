@@ -22,7 +22,7 @@ import '../utils/file_utils.dart';
 DownloadManager downloadManager = DownloadManager();
 
 class DownloadManager {
-  //Platform channels
+  // Platform channels
   static const MethodChannel platform = MethodChannel('r.r.refreezer/native');
   static const EventChannel eventChannel =
       EventChannel('r.r.refreezer/downloads');
@@ -34,132 +34,335 @@ class DownloadManager {
   String? offlinePath;
   Database? db;
 
-  //Start/Resume downloads
+  // Start/Resume downloads
   Future start() async {
-    //Returns whether service is bound or not, the delay is really shitty/hacky way, until i find a real solution
     await updateServiceSettings();
     await platform.invokeMethod('start');
   }
 
-  //Stop/Pause downloads
+  // Stop/Pause downloads
   Future stop() async {
     await platform.invokeMethod('stop');
   }
 
   Future init() async {
-    //Remove old DB
+    // Remove old DB
     File oldDbFile = File(p.join((await getDatabasesPath()), 'offline.db'));
     if (await oldDbFile.exists()) {
       await oldDbFile.delete();
     }
 
     String dbPath = p.join((await getDatabasesPath()), 'offline2.db');
-    //Open db
-    db = await openDatabase(dbPath, version: 1,
-        onCreate: (Database db, int version) async {
-      Batch b = db.batch();
-      //Create tables, if doesn't exit
-      b.execute('''CREATE TABLE Tracks (
-        id TEXT PRIMARY KEY, title TEXT, album TEXT, artists TEXT, duration INTEGER, albumArt TEXT, trackNumber INTEGER, offline INTEGER, lyrics TEXT, favorite INTEGER, diskNumber INTEGER, explicit INTEGER, fallback INTEGER)''');
-      b.execute('''CREATE TABLE Albums (
-        id TEXT PRIMARY KEY, title TEXT, artists TEXT, tracks TEXT, art TEXT, fans INTEGER, offline INTEGER, library INTEGER, type INTEGER, releaseDate TEXT)''');
-      b.execute('''CREATE TABLE Artists (
-        id TEXT PRIMARY KEY, name TEXT, albums TEXT, topTracks TEXT, picture TEXT, fans INTEGER, albumCount INTEGER, offline INTEGER, library INTEGER, radio INTEGER)''');
-      b.execute('''CREATE TABLE Playlists (
-        id TEXT PRIMARY KEY, title TEXT, tracks TEXT, image TEXT, duration INTEGER, userId TEXT, userName TEXT, fans INTEGER, library INTEGER, description TEXT)''');
-      await b.commit();
-    });
 
-    //Create offline directory
+    // Open db
+    db = await openDatabase(
+      dbPath,
+      version: 1,
+      onCreate: (Database db, int version) async {
+        Batch b = db.batch();
+        b.execute('''CREATE TABLE Tracks (
+          id TEXT PRIMARY KEY, title TEXT, album TEXT, artists TEXT, duration INTEGER, albumArt TEXT, trackNumber INTEGER, offline INTEGER, lyrics TEXT, favorite INTEGER, diskNumber INTEGER, explicit INTEGER, fallback INTEGER)''');
+        b.execute('''CREATE TABLE Albums (
+          id TEXT PRIMARY KEY, title TEXT, artists TEXT, tracks TEXT, art TEXT, fans INTEGER, offline INTEGER, library INTEGER, type INTEGER, releaseDate TEXT)''');
+        b.execute('''CREATE TABLE Artists (
+          id TEXT PRIMARY KEY, name TEXT, albums TEXT, topTracks TEXT, picture TEXT, fans INTEGER, albumCount INTEGER, offline INTEGER, library INTEGER, radio INTEGER)''');
+        b.execute('''CREATE TABLE Playlists (
+          id TEXT PRIMARY KEY, title TEXT, tracks TEXT, image TEXT, duration INTEGER, userId TEXT, userName TEXT, fans INTEGER, library INTEGER, description TEXT)''');
+        await b.commit();
+      },
+    );
+
+    // Create offline directory
     var directory = await getExternalStorageDirectory();
     if (directory != null) {
       offlinePath = p.join(directory.path, 'offline/');
       await Directory(offlinePath!).create(recursive: true);
     }
 
-    //Update settings
+    // Precreate surround directories
+    await getSurroundDirectory();
+    await getSurroundDirectory(persistent: true);
+
+    // Update settings
     await updateServiceSettings();
 
-    //Listen to state change event
+    // Listen to state change event
     eventChannel.receiveBroadcastStream().listen((e) {
       if (e['action'] == 'onStateChange') {
         running = e['running'];
         queueSize = e['queueSize'];
       }
 
-      //Forward
+      // Forward
       serviceEvents.add(e);
     });
 
     await platform.invokeMethod('loadDownloads');
   }
 
-  //Get all downloads from db
+  // ----------------------------
+  // Surround helpers (new)
+  // ----------------------------
+
+  /// Returns the directory used for generated surround files.
+  /// [persistent=false] => temp dir
+  /// [persistent=true]  => app documents dir
+  Future<Directory> getSurroundDirectory({bool persistent = false}) async {
+    final Directory baseDir = persistent
+        ? await getApplicationDocumentsDirectory()
+        : await getTemporaryDirectory();
+
+    final Directory surroundDir = Directory(
+      p.join(baseDir.path, 'surround'),
+    );
+
+    if (!await surroundDir.exists()) {
+      await surroundDir.create(recursive: true);
+    }
+
+    return surroundDir;
+  }
+
+  /// Builds a surround output path for a track.
+  Future<String> getSurroundPathForTrack(
+    String trackId, {
+    String extension = 'ts',
+    bool persistent = false,
+  }) async {
+    final Directory dir =
+        await getSurroundDirectory(persistent: persistent);
+    return p.join(dir.path, '$trackId.$extension');
+  }
+
+  /// Finds an already existing surround file using the same lookup idea
+  /// as the audio service (temp -> docs -> external app dir).
+  Future<String?> findExistingSurroundPath(
+    String trackId, {
+    String extension = 'ts',
+  }) async {
+    final List<String> candidates = [];
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      candidates.add(p.join(tempDir.path, 'surround', '$trackId.$extension'));
+    } catch (_) {}
+
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      candidates.add(p.join(docsDir.path, 'surround', '$trackId.$extension'));
+    } catch (_) {}
+
+    try {
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null) {
+        candidates.add(p.join(extDir.path, 'surround', '$trackId.$extension'));
+      }
+    } catch (_) {}
+
+    for (final candidate in candidates) {
+      final file = File(candidate);
+      if (await file.exists()) {
+        return file.path;
+      }
+    }
+
+    return null;
+  }
+
+  Future<bool> hasSurroundFile(
+    String trackId, {
+    String extension = 'ts',
+  }) async {
+    return (await findExistingSurroundPath(trackId, extension: extension)) !=
+        null;
+  }
+
+  Future<File?> getSurroundFileForTrack(
+    String trackId, {
+    String extension = 'ts',
+  }) async {
+    final String? path =
+        await findExistingSurroundPath(trackId, extension: extension);
+    if (path == null) return null;
+    return File(path);
+  }
+
+  /// Returns a copy of the track with surround metadata attached if a file exists.
+  Future<Track> attachSurroundMetadata(
+    Track track, {
+    String preset = 'balanced',
+    String extension = 'ts',
+  }) async {
+    if ((track.id ?? '').isEmpty) return track;
+
+    final String? existingPath =
+        await findExistingSurroundPath(track.id!, extension: extension);
+
+    if (existingPath == null) {
+      return track.copyWith(
+        surroundTsPath: null,
+        surroundReady: false,
+        surroundPreset: track.surroundPreset,
+      );
+    }
+
+    return track.copyWith(
+      surroundTsPath: existingPath,
+      surroundReady: true,
+      surroundPreset: track.surroundPreset ?? preset,
+    );
+  }
+
+  /// Removes surround files for a track from temp/docs/external app dir.
+  Future<void> removeSurroundFilesForTrack(
+    String trackId, {
+    String extension = 'ts',
+  }) async {
+    final List<String> candidates = [];
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      candidates.add(p.join(tempDir.path, 'surround', '$trackId.$extension'));
+    } catch (_) {}
+
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      candidates.add(p.join(docsDir.path, 'surround', '$trackId.$extension'));
+    } catch (_) {}
+
+    try {
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null) {
+        candidates.add(p.join(extDir.path, 'surround', '$trackId.$extension'));
+      }
+    } catch (_) {}
+
+    for (final candidate in candidates) {
+      try {
+        final file = File(candidate);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (e) {
+        Logger.root.warning('Failed to delete surround file: $candidate', e);
+      }
+    }
+  }
+
+  /// Clears generated surround cache folders.
+  /// [persistent=true] clears docs-based surround cache too.
+  Future<void> clearSurroundCache({bool persistent = true}) async {
+    final List<Directory> dirs = [];
+
+    try {
+      dirs.add(await getSurroundDirectory(persistent: false));
+    } catch (_) {}
+
+    if (persistent) {
+      try {
+        dirs.add(await getSurroundDirectory(persistent: true));
+      } catch (_) {}
+    }
+
+    for (final dir in dirs) {
+      try {
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+      } catch (e) {
+        Logger.root.warning('Failed to clear surround cache: ${dir.path}', e);
+      }
+    }
+
+    // Recreate dirs for future use
+    try {
+      await getSurroundDirectory(persistent: false);
+    } catch (_) {}
+    if (persistent) {
+      try {
+        await getSurroundDirectory(persistent: true);
+      } catch (_) {}
+    }
+  }
+
+  // Get all downloads from db
   Future<List<Download>> getDownloads() async {
     List raw = await platform.invokeMethod('getDownloads');
     return raw.map((d) => Download.fromJson(d)).toList();
   }
 
-  //Insert track and metadata to DB
+  // Insert track and metadata to DB
   Future _addTrackToDB(Batch batch, Track track, bool overwriteTrack) async {
-    batch.insert('Tracks', track.toSQL(off: true),
-        conflictAlgorithm: overwriteTrack
-            ? ConflictAlgorithm.replace
-            : ConflictAlgorithm.ignore);
     batch.insert(
-        'Albums', track.album?.toSQL(off: false) as Map<String, dynamic>,
-        conflictAlgorithm: ConflictAlgorithm.ignore);
-    //Artists
+      'Tracks',
+      track.toSQL(off: true),
+      conflictAlgorithm: overwriteTrack
+          ? ConflictAlgorithm.replace
+          : ConflictAlgorithm.ignore,
+    );
+    batch.insert(
+      'Albums',
+      track.album?.toSQL(off: false) as Map<String, dynamic>,
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+
+    // Artists
     if (track.artists != null) {
       for (Artist a in track.artists!) {
-        batch.insert('Artists', a.toSQL(off: false),
-            conflictAlgorithm: ConflictAlgorithm.ignore);
+        batch.insert(
+          'Artists',
+          a.toSQL(off: false),
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
       }
     }
     return batch;
   }
 
-  //Quality selector for custom quality
+  // Quality selector for custom quality
   Future qualitySelect() async {
     AudioQuality? quality;
     await showModalBottomSheet(
-        context: mainNavigatorKey.currentContext!,
-        builder: (context) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(0, 12, 0, 2),
-                child: Text(
-                  'Quality'.i18n,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 20.0),
+      context: mainNavigatorKey.currentContext!,
+      builder: (context) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 12, 0, 2),
+              child: Text(
+                'Quality'.i18n,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20.0,
                 ),
               ),
-              ListTile(
-                title: const Text('MP3 128kbps'),
-                onTap: () {
-                  quality = AudioQuality.MP3_128;
-                  mainNavigatorKey.currentState?.pop();
-                },
-              ),
-              ListTile(
-                title: const Text('MP3 320kbps'),
-                onTap: () {
-                  quality = AudioQuality.MP3_320;
-                  mainNavigatorKey.currentState?.pop();
-                },
-              ),
-              ListTile(
-                title: const Text('FLAC'),
-                onTap: () {
-                  quality = AudioQuality.FLAC;
-                  mainNavigatorKey.currentState?.pop();
-                },
-              )
-            ],
-          );
-        });
+            ),
+            ListTile(
+              title: const Text('MP3 128kbps'),
+              onTap: () {
+                quality = AudioQuality.MP3_128;
+                mainNavigatorKey.currentState?.pop();
+              },
+            ),
+            ListTile(
+              title: const Text('MP3 320kbps'),
+              onTap: () {
+                quality = AudioQuality.MP3_320;
+                mainNavigatorKey.currentState?.pop();
+              },
+            ),
+            ListTile(
+              title: const Text('FLAC'),
+              onTap: () {
+                quality = AudioQuality.FLAC;
+                mainNavigatorKey.currentState?.pop();
+              },
+            )
+          ],
+        );
+      },
+    );
     return quality;
   }
 
@@ -172,8 +375,9 @@ class DownloadManager {
         return AlertDialog(
           title: Text('Storage Permission Required'.i18n),
           content: Text(
-              'Storage permission is required to download content.\nPlease open system settings and grant storage permission to ReFreezer.'
-                  .i18n),
+            'Storage permission is required to download content.\nPlease open system settings and grant storage permission to ReFreezer.'
+                .i18n,
+          ),
           actions: <Widget>[
             TextButton(
               child: Text('Cancel'.i18n),
@@ -206,8 +410,9 @@ class DownloadManager {
         return AlertDialog(
           title: Text('External Storage Access Required'.i18n),
           content: Text(
-              'To download files to the external storage, please grant access to the SD card or USB root directory in the following screen.'
-                  .i18n),
+            'To download files to the external storage, please grant access to the SD card or USB root directory in the following screen.'
+                .i18n,
+          ),
           actions: <Widget>[
             TextButton(
               child: Text('Cancel'.i18n),
@@ -231,91 +436,111 @@ class DownloadManager {
     return completer.future;
   }
 
-  Future<bool> addOfflineTrack(Track track,
-      {private = true, isSingleton = false}) async {
-    //Permission
+  Future<bool> addOfflineTrack(
+    Track track, {
+    private = true,
+    isSingleton = false,
+  }) async {
+    // Permission
     if (!private && !(await checkPermission())) return false;
 
-    //Ask for quality
+    // Ask for quality
     AudioQuality? quality;
     if (!private && settings.downloadQuality == AudioQuality.ASK) {
       quality = await qualitySelect();
       if (quality == null) return false;
     }
 
-    //Fetch track if missing meta
+    // Fetch track if missing meta
     if (track.artists == null || track.artists!.isEmpty) {
       track = await deezerAPI.track(track.id!);
     }
 
-    //Add to DB
+    // Add to DB
     if (private) {
       Batch b = db!.batch();
       b = await _addTrackToDB(b, track, true);
       await b.commit();
 
-      //Cache art
+      // Cache art
       DefaultCacheManager().getSingleFile(track.albumArt?.thumb ?? '');
       DefaultCacheManager().getSingleFile(track.albumArt?.full ?? '');
     }
 
-    //Get path
+    // Get path
     String path = _generatePath(track, private, isSingleton: isSingleton);
     await platform.invokeMethod('addDownloads', [
-      await Download.jsonFromTrack(track, path,
-          private: private, quality: quality)
+      await Download.jsonFromTrack(
+        track,
+        path,
+        private: private,
+        quality: quality,
+      )
     ]);
     await start();
     return true;
   }
 
   Future addOfflineAlbum(Album album, {private = true}) async {
-    //Permission
+    // Permission
     if (!private && !(await checkPermission())) return;
 
-    //Ask for quality
+    // Ask for quality
     AudioQuality? quality;
     if (!private && settings.downloadQuality == AudioQuality.ASK) {
       quality = await qualitySelect();
       if (quality == null) return false;
     }
 
-    //Get from API if no tracks
+    // Get from API if no tracks
     if (album.tracks == null || album.tracks!.isEmpty) {
       album = await deezerAPI.album(album.id ?? '');
     }
 
-    //Add to DB
+    // Add to DB
     if (private) {
-      //Cache art
+      // Cache art
       DefaultCacheManager().getSingleFile(album.art?.thumb ?? '');
       DefaultCacheManager().getSingleFile(album.art?.full ?? '');
 
       Batch b = db!.batch();
-      b.insert('Albums', album.toSQL(off: true),
-          conflictAlgorithm: ConflictAlgorithm.replace);
+      b.insert(
+        'Albums',
+        album.toSQL(off: true),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
       for (Track t in album.tracks ?? []) {
         b = await _addTrackToDB(b, t, false);
       }
       await b.commit();
     }
 
-    //Create downloads
+    // Create downloads
     List<Map> out = [];
     for (Track t in (album.tracks ?? [])) {
-      out.add(await Download.jsonFromTrack(t, _generatePath(t, private),
-          private: private, quality: quality));
+      out.add(
+        await Download.jsonFromTrack(
+          t,
+          _generatePath(t, private),
+          private: private,
+          quality: quality,
+        ),
+      );
     }
     await platform.invokeMethod('addDownloads', out);
     await start();
   }
 
-  Future addOfflinePlaylist(Playlist playlist,
-      {private = true, AudioQuality? quality}) async {
-    //Permission
+  Future addOfflinePlaylist(
+    Playlist playlist, {
+    private = true,
+    AudioQuality? quality,
+  }) async {
+    // Permission
     if (!private && !(await checkPermission())) return;
 
-    //Ask for quality
+    // Ask for quality
     if (!private &&
         settings.downloadQuality == AudioQuality.ASK &&
         quality == null) {
@@ -323,31 +548,37 @@ class DownloadManager {
       if (quality == null) return false;
     }
 
-    //Get tracks if missing
+    // Get tracks if missing
     if ((playlist.tracks == null) ||
         (playlist.tracks?.length ?? 0) < (playlist.trackCount ?? 0)) {
       playlist = await deezerAPI.fullPlaylist(playlist.id ?? '');
     }
 
-    //Add to DB
+    // Add to DB
     if (private) {
       Batch b = db!.batch();
-      b.insert('Playlists', playlist.toSQL(),
-          conflictAlgorithm: ConflictAlgorithm.replace);
+      b.insert(
+        'Playlists',
+        playlist.toSQL(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
       for (Track t in (playlist.tracks ?? [])) {
         b = await _addTrackToDB(b, t, false);
-        //Cache art
+
+        // Cache art
         DefaultCacheManager().getSingleFile(t.albumArt?.thumb ?? '');
         DefaultCacheManager().getSingleFile(t.albumArt?.full ?? '');
       }
       await b.commit();
     }
 
-    //Generate downloads
+    // Generate downloads
     List<Map> out = [];
     for (int i = 0; i < (playlist.tracks?.length ?? 0); i++) {
       Track t = playlist.tracks![i];
-      out.add(await Download.jsonFromTrack(
+      out.add(
+        await Download.jsonFromTrack(
           t,
           _generatePath(
             t,
@@ -356,49 +587,71 @@ class DownloadManager {
             playlistTrackNumber: i,
           ),
           private: private,
-          quality: quality));
+          quality: quality,
+        ),
+      );
     }
     await platform.invokeMethod('addDownloads', out);
     await start();
   }
 
-  //Get track and meta from offline DB
-  Future<Track?> getOfflineTrack(String id,
-      {Album? album, List<Artist>? artists}) async {
-    List tracks = await db!.query('Tracks', where: 'id == ?', whereArgs: [id]);
+  // Get track and meta from offline DB
+  Future<Track?> getOfflineTrack(
+    String id, {
+    Album? album,
+    List<Artist>? artists,
+  }) async {
+    List tracks = await db!.query(
+      'Tracks',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (tracks.isEmpty) return null;
+
     Track track = Track.fromSQL(tracks[0]);
 
-    //Get album
+    // Get album
     if (album == null) {
-      List rawAlbums = await db!
-          .query('Albums', where: 'id == ?', whereArgs: [track.album?.id]);
+      List rawAlbums = await db!.query(
+        'Albums',
+        where: 'id == ?',
+        whereArgs: [track.album?.id],
+      );
       if (rawAlbums.isNotEmpty) track.album = Album.fromSQL(rawAlbums[0]);
     } else {
       track.album = album;
     }
 
-    //Get artists
+    // Get artists
     if (artists == null) {
       List<Artist> newArtists = [];
       for (Artist artist in (track.artists ?? [])) {
-        List rawArtist = await db!
-            .query('Artists', where: 'id == ?', whereArgs: [artist.id]);
-        if (rawArtist.isNotEmpty) newArtists.add(Artist.fromSQL(rawArtist[0]));
+        List rawArtist = await db!.query(
+          'Artists',
+          where: 'id == ?',
+          whereArgs: [artist.id],
+        );
+        if (rawArtist.isNotEmpty) {
+          newArtists.add(Artist.fromSQL(rawArtist[0]));
+        }
       }
       if (newArtists.isNotEmpty) track.artists = newArtists;
     } else {
       track.artists = artists;
     }
+
     return track;
   }
 
-  //Get offline library tracks
+  // Get offline library tracks
   Future<List<Track>> getOfflineTracks() async {
-    List rawTracks = await db!.query('Tracks',
-        where: 'library == 1 AND offline == 1', columns: ['id']);
+    List rawTracks = await db!.query(
+      'Tracks',
+      where: 'library == 1 AND offline == 1',
+      columns: ['id'],
+    );
+
     List<Track> out = [];
-    //Load track meta individually
     for (Map rawTrack in rawTracks) {
       var offlineTrack = await getOfflineTrack(rawTrack['id']);
       if (offlineTrack != null) out.add(offlineTrack);
@@ -406,12 +659,15 @@ class DownloadManager {
     return out;
   }
 
-  //Get all offline available tracks
+  // Get all offline available tracks
   Future<List<Track>> allOfflineTracks() async {
-    List rawTracks =
-        await db!.query('Tracks', where: 'offline == 1', columns: ['id']);
+    List rawTracks = await db!.query(
+      'Tracks',
+      where: 'offline == 1',
+      columns: ['id'],
+    );
+
     List<Track> out = [];
-    //Load track meta individually
     for (Map rawTrack in rawTracks) {
       var offlineTrack = await getOfflineTrack(rawTrack['id']);
       if (offlineTrack != null) out.add(offlineTrack);
@@ -419,12 +675,15 @@ class DownloadManager {
     return out;
   }
 
-  //Get all offline albums
+  // Get all offline albums
   Future<List<Album>> getOfflineAlbums() async {
-    List rawAlbums =
-        await db!.query('Albums', where: 'offline == 1', columns: ['id']);
+    List rawAlbums = await db!.query(
+      'Albums',
+      where: 'offline == 1',
+      columns: ['id'],
+    );
+
     List<Album> out = [];
-    //Load each album
     for (Map rawAlbum in rawAlbums) {
       var offlineAlbum = await getOfflineAlbum(rawAlbum['id']);
       if (offlineAlbum != null) out.add(offlineAlbum);
@@ -432,40 +691,48 @@ class DownloadManager {
     return out;
   }
 
-  //Get offline album with meta
+  // Get offline album with meta
   Future<Album?> getOfflineAlbum(String id) async {
-    List rawAlbums =
-        await db!.query('Albums', where: 'id == ?', whereArgs: [id]);
+    List rawAlbums = await db!.query(
+      'Albums',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (rawAlbums.isEmpty) return null;
+
     Album album = Album.fromSQL(rawAlbums[0]);
 
     List<Track> tracks = [];
-    //Load tracks
     for (int i = 0; i < (album.tracks?.length ?? 0); i++) {
       var offlineTrack = await getOfflineTrack(album.tracks![i].id!);
       if (offlineTrack != null) tracks.add(offlineTrack);
     }
     album.tracks = tracks;
-    //Load artists
+
     List<Artist> artists = [];
     for (int i = 0; i < (album.artists?.length ?? 0); i++) {
-      artists.add((await getOfflineArtist(album.artists![i].id ?? '')) ??
-          album.artists![i]);
+      artists.add(
+        (await getOfflineArtist(album.artists![i].id ?? '')) ??
+            album.artists![i],
+      );
     }
     album.artists = artists;
 
     return album;
   }
 
-  //Get offline artist METADATA, not tracks
+  // Get offline artist METADATA, not tracks
   Future<Artist?> getOfflineArtist(String id) async {
-    List rawArtists =
-        await db!.query('Artists', where: 'id == ?', whereArgs: [id]);
+    List rawArtists = await db!.query(
+      'Artists',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (rawArtists.isEmpty) return null;
     return Artist.fromSQL(rawArtists[0]);
   }
 
-  //Get all offline playlists
+  // Get all offline playlists
   Future<List<Playlist>> getOfflinePlaylists() async {
     List rawPlaylists = await db!.query('Playlists', columns: ['id']);
     List<Playlist> out = [];
@@ -476,14 +743,17 @@ class DownloadManager {
     return out;
   }
 
-  //Get offline playlist
+  // Get offline playlist
   Future<Playlist?> getOfflinePlaylist(String id) async {
-    List rawPlaylists =
-        await db!.query('Playlists', where: 'id == ?', whereArgs: [id]);
+    List rawPlaylists = await db!.query(
+      'Playlists',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (rawPlaylists.isEmpty) return null;
 
     Playlist playlist = Playlist.fromSQL(rawPlaylists[0]);
-    //Load tracks
+
     List<Track> tracks = [];
     if (playlist.tracks != null) {
       for (Track t in playlist.tracks!) {
@@ -497,126 +767,163 @@ class DownloadManager {
 
   Future removeOfflineTracks(List<Track> tracks) async {
     for (Track t in tracks) {
-      //Check if library
-      List rawTrack = await db!.query('Tracks',
-          where: 'id == ?', whereArgs: [t.id], columns: ['favorite']);
+      // Check if library
+      List rawTrack = await db!.query(
+        'Tracks',
+        where: 'id == ?',
+        whereArgs: [t.id],
+        columns: ['favorite'],
+      );
+
       if (rawTrack.isNotEmpty) {
-        //Count occurrences in playlists and albums
+        // Count occurrences in playlists and albums
         List albums = await db!
             .rawQuery('SELECT (id) FROM Albums WHERE tracks LIKE "%${t.id}%"');
         List playlists = await db!.rawQuery(
-            'SELECT (id) FROM Playlists WHERE tracks LIKE "%${t.id}%"');
+          'SELECT (id) FROM Playlists WHERE tracks LIKE "%${t.id}%"',
+        );
+
         if (albums.length + playlists.length == 0 &&
             rawTrack[0]['favorite'] == 0) {
-          //Safe to remove
           await db!.delete('Tracks', where: 'id == ?', whereArgs: [t.id]);
         } else {
-          await db!.update('Tracks', {'offline': 0},
-              where: 'id == ?', whereArgs: [t.id]);
+          await db!.update(
+            'Tracks',
+            {'offline': 0},
+            where: 'id == ?',
+            whereArgs: [t.id],
+          );
         }
       }
 
-      //Remove file
+      // Remove file
       try {
         File(p.join(offlinePath!, t.id)).delete();
       } catch (e) {
         Logger.root.severe('Error deleting offline track: ${t.id}', e);
       }
+
+      // Also remove generated surround artifacts tied to the same track id
+      if ((t.id ?? '').isNotEmpty) {
+        await removeSurroundFilesForTrack(t.id!);
+      }
     }
   }
 
   Future removeOfflineAlbum(String id) async {
-    //Get album
-    List rawAlbums =
-        await db!.query('Albums', where: 'id == ?', whereArgs: [id]);
+    List rawAlbums = await db!.query(
+      'Albums',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (rawAlbums.isEmpty) return;
+
     Album album = Album.fromSQL(rawAlbums[0]);
-    //Remove album
+
     await db!.delete('Albums', where: 'id == ?', whereArgs: [id]);
-    //Remove tracks
     await removeOfflineTracks(album.tracks!);
   }
 
   Future removeOfflinePlaylist(String id) async {
-    //Fetch playlist
-    List rawPlaylists =
-        await db!.query('Playlists', where: 'id == ?', whereArgs: [id]);
+    List rawPlaylists = await db!.query(
+      'Playlists',
+      where: 'id == ?',
+      whereArgs: [id],
+    );
     if (rawPlaylists.isEmpty) return;
+
     Playlist playlist = Playlist.fromSQL(rawPlaylists[0]);
-    //Remove playlist
+
     await db!.delete('Playlists', where: 'id == ?', whereArgs: [id]);
     await removeOfflineTracks(playlist.tracks!);
   }
 
-  //Check if album, track or playlist is offline
-  Future<bool> checkOffline(
-      {Album? album, Track? track, Playlist? playlist}) async {
+  // Check if album, track or playlist is offline
+  Future<bool> checkOffline({
+    Album? album,
+    Track? track,
+    Playlist? playlist,
+  }) async {
     if (track != null) {
-      //Track
-      List res = await db!.query('Tracks',
-          where: 'id == ? AND offline == 1', whereArgs: [track.id]);
+      List res = await db!.query(
+        'Tracks',
+        where: 'id == ? AND offline == 1',
+        whereArgs: [track.id],
+      );
       if (res.isEmpty) return false;
       return true;
     } else if (album != null) {
-      //Album
-      List res = await db!.query('Albums',
-          where: 'id == ? AND offline == 1', whereArgs: [album.id]);
+      List res = await db!.query(
+        'Albums',
+        where: 'id == ? AND offline == 1',
+        whereArgs: [album.id],
+      );
       if (res.isEmpty) return false;
       return true;
     } else if (playlist != null) {
-      //Playlist
-      List res = await db!
-          .query('Playlists', where: 'id == ?', whereArgs: [playlist.id]);
+      List res = await db!.query(
+        'Playlists',
+        where: 'id == ?',
+        whereArgs: [playlist.id],
+      );
       if (res.isEmpty) return false;
       return true;
     }
     return false;
   }
 
-  //Offline search
+  // Offline search
   Future<SearchResults> search(String query) async {
     SearchResults results =
         SearchResults(tracks: [], albums: [], artists: [], playlists: []);
-    //Tracks
+
+    // Tracks
     List tracksData = await db!.rawQuery(
-        'SELECT * FROM Tracks WHERE offline == 1 AND title like "%$query%"');
+      'SELECT * FROM Tracks WHERE offline == 1 AND title like "%$query%"',
+    );
     for (Map trackData in tracksData) {
       var offlineTrack = await getOfflineTrack(trackData['id']);
       if (offlineTrack != null) results.tracks!.add(offlineTrack);
     }
-    //Albums
+
+    // Albums
     List albumsData = await db!.rawQuery(
-        'SELECT (id) FROM Albums WHERE offline == 1 AND title like "%$query%"');
+      'SELECT (id) FROM Albums WHERE offline == 1 AND title like "%$query%"',
+    );
     for (Map rawAlbum in albumsData) {
       var offlineAlbum = await getOfflineAlbum(rawAlbum['id']);
       if (offlineAlbum != null) results.albums!.add(offlineAlbum);
     }
-    //Playlists
+
+    // Playlists
     List playlists = await db!
         .rawQuery('SELECT * FROM Playlists WHERE title like "%$query%"');
     for (Map playlist in playlists) {
       var offlinePlaylist = await getOfflinePlaylist(playlist['id']);
       if (offlinePlaylist != null) results.playlists!.add(offlinePlaylist);
     }
+
     return results;
   }
 
-  //Sanitize filename
+  // Sanitize filename
   String sanitize(String input) {
     RegExp sanitize = RegExp(r'[\/\\\?\%\*\:\|\"\<\>]');
     return input.replaceAll(sanitize, '');
   }
 
-  //Generate track download path
-  String _generatePath(Track track, bool private,
-      {String? playlistName,
-      int? playlistTrackNumber,
-      bool isSingleton = false}) {
+  // Generate track download path
+  String _generatePath(
+    Track track,
+    bool private, {
+    String? playlistName,
+    int? playlistTrackNumber,
+    bool isSingleton = false,
+  }) {
     String path;
     if (private) {
       path = p.join(offlinePath!, track.id);
     } else {
-      //Download path
       path = settings.downloadPath ?? '';
 
       if ((settings.playlistFolder) && playlistName != null) {
@@ -625,24 +932,33 @@ class DownloadManager {
 
       if (settings.artistFolder) path = p.join(path, '%albumArtist%');
 
-      //Album folder / with disk number
+      // Album folder / with disk number
       if (settings.albumFolder) {
         if (settings.albumDiscFolder) {
-          path = p.join(path,
-              '%album%' + ' - Disk ' + (track.diskNumber ?? 1).toString());
+          path = p.join(
+            path,
+            '%album%' + ' - Disk ' + (track.diskNumber ?? 1).toString(),
+          );
         } else {
           path = p.join(path, '%album%');
         }
       }
-      //Final path
-      path = p.join(path,
-          isSingleton ? settings.singletonFilename : settings.downloadFilename);
-      //Playlist track number variable (not accessible in service)
+
+      path = p.join(
+        path,
+        isSingleton ? settings.singletonFilename : settings.downloadFilename,
+      );
+
+      // Playlist track number variable
       if (playlistTrackNumber != null) {
         path = path.replaceAll(
-            '%playlistTrackNumber%', playlistTrackNumber.toString());
-        path = path.replaceAll('%0playlistTrackNumber%',
-            playlistTrackNumber.toString().padLeft(2, '0'));
+          '%playlistTrackNumber%',
+          playlistTrackNumber.toString(),
+        );
+        path = path.replaceAll(
+          '%0playlistTrackNumber%',
+          playlistTrackNumber.toString().padLeft(2, '0'),
+        );
       } else {
         path = path.replaceAll('%playlistTrackNumber%', '');
         path = path.replaceAll('%0playlistTrackNumber%', '');
@@ -651,73 +967,76 @@ class DownloadManager {
     return path;
   }
 
-  //Get stats for library screen
+  // Get stats for library screen
   Future<List<String>> getStats() async {
-    //Get offline counts
     int? trackCount = Sqflite.firstIntValue(
-        (await db!.rawQuery('SELECT COUNT(*) FROM Tracks WHERE offline == 1')));
+      (await db!.rawQuery('SELECT COUNT(*) FROM Tracks WHERE offline == 1')),
+    );
     int? albumCount = Sqflite.firstIntValue(
-        (await db!.rawQuery('SELECT COUNT(*) FROM Albums WHERE offline == 1')));
+      (await db!.rawQuery('SELECT COUNT(*) FROM Albums WHERE offline == 1')),
+    );
     int? playlistCount = Sqflite.firstIntValue(
-        (await db!.rawQuery('SELECT COUNT(*) FROM Playlists')));
-    //Free space
+      (await db!.rawQuery('SELECT COUNT(*) FROM Playlists')),
+    );
+
+    // Free space
     double diskSpace = await DiskSpacePlus.getFreeDiskSpace ?? 0;
-    //Used space
+
+    // Used space
     List<FileSystemEntity> offlineStat =
         await Directory(offlinePath!).list().toList();
     int offlineSize = 0;
     for (var fs in offlineStat) {
       offlineSize += (await fs.stat()).size;
     }
-    //Return in list, //TODO: Make into class in future
-    return ([
+
+    return [
       trackCount.toString(),
       albumCount.toString(),
       playlistCount.toString(),
       filesize(offlineSize),
-      filesize((diskSpace * 1000000).floor())
-    ]);
+      filesize((diskSpace * 1000000).floor()),
+    ];
   }
 
-  //Send settings to download service
+  // Send settings to download service
   Future updateServiceSettings() async {
-    await platform.invokeMethod(
-        'updateSettings', settings.getServiceSettings());
+    await platform.invokeMethod('updateSettings', settings.getServiceSettings());
   }
 
-  //Check storage permission
+  // Check storage permission
   Future<bool> checkPermission() async {
-    //if (await FileUtils.checkManageStoragePermission(
-    //    openStoragePermissionSettingsDialog)) {
     if (await FileUtils.checkExternalStoragePermissions(
       openStoragePermissionSettingsDialog,
     )) {
       return true;
     } else {
       Fluttertoast.showToast(
-          msg: 'Storage permission denied!'.i18n,
-          toastLength: Toast.LENGTH_SHORT,
-          gravity: ToastGravity.BOTTOM);
+        msg: 'Storage permission denied!'.i18n,
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+      );
       return false;
     }
   }
 
-  //Remove download from queue/finished
+  // Remove download from queue/finished
   Future removeDownload(int id) async {
     await platform.invokeMethod('removeDownload', {'id': id});
   }
 
-  //Restart failed downloads
+  // Restart failed downloads
   Future retryDownloads() async {
-    //Permission
     if (!(await checkPermission())) return;
     await platform.invokeMethod('retryDownloads');
   }
 
-  //Delete downloads by state
+  // Delete downloads by state
   Future removeDownloads(DownloadState state) async {
     await platform.invokeMethod(
-        'removeDownloads', {'state': DownloadState.values.indexOf(state)});
+      'removeDownloads',
+      {'state': DownloadState.values.indexOf(state)},
+    );
   }
 }
 
@@ -733,28 +1052,30 @@ class Download {
   String? title;
   String? image;
   int? quality;
-  //Dynamic
+
+  // Dynamic
   DownloadState? state;
   int? received;
   int? filesize;
 
-  Download(
-      {this.id,
-      this.path,
-      this.private,
-      this.trackId,
-      this.streamTrackId,
-      this.trackToken,
-      this.md5origin,
-      this.mediaVersion,
-      this.title,
-      this.image,
-      this.state,
-      this.received,
-      this.filesize,
-      this.quality});
+  Download({
+    this.id,
+    this.path,
+    this.private,
+    this.trackId,
+    this.streamTrackId,
+    this.trackToken,
+    this.md5origin,
+    this.mediaVersion,
+    this.title,
+    this.image,
+    this.state,
+    this.received,
+    this.filesize,
+    this.quality,
+  });
 
-  //Get progress between 0 - 1
+  // Get progress between 0 - 1
   double get progress {
     return ((received?.toDouble() ?? 0.0) / (filesize?.toDouble() ?? 1.0))
         .toDouble();
@@ -762,29 +1083,33 @@ class Download {
 
   factory Download.fromJson(Map<dynamic, dynamic> data) {
     return Download(
-        path: data['path'],
-        image: data['image'],
-        private: data['private'],
-        trackId: data['trackId'],
-        id: data['id'],
-        state: DownloadState.values[data['state']],
-        title: data['title'],
-        quality: data['quality']);
+      path: data['path'],
+      image: data['image'],
+      private: data['private'],
+      trackId: data['trackId'],
+      id: data['id'],
+      state: DownloadState.values[data['state']],
+      title: data['title'],
+      quality: data['quality'],
+    );
   }
 
-  //Change values from "update json"
+  // Change values from "update json"
   void updateFromJson(Map<dynamic, dynamic> data) {
     quality = data['quality'];
     received = data['received'] ?? 0;
     state = DownloadState.values[data['state']];
-    //Prevent null division later
     filesize = ((data['filesize'] ?? 0) <= 0) ? 1 : (data['filesize'] ?? 1);
   }
 
-  //Track to download JSON for service
-  static Future<Map> jsonFromTrack(Track t, String path,
-      {private = true, AudioQuality? quality}) async {
-    //Get download info
+  // Track to download JSON for service
+  static Future<Map> jsonFromTrack(
+    Track t,
+    String path, {
+    private = true,
+    AudioQuality? quality,
+  }) async {
+    // Get download info
     if (t.playbackDetails?.isEmpty ?? true) {
       t = await deezerAPI.track(t.id ?? '');
     }
@@ -812,5 +1137,5 @@ class Download {
   }
 }
 
-//Has to be same order as in java
+// Has to be same order as in java
 enum DownloadState { NONE, DOWNLOADING, POST, DONE, DEEZER_ERROR, ERROR }

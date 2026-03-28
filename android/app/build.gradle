@@ -74,9 +74,17 @@ android {
             shrinkResources false
             minifyEnabled false
         }
+
         debug {
             applicationIdSuffix '.debug'
             versionNameSuffix '-debug'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+            assets.srcDirs = ['src/main/assets']
         }
     }
 
@@ -84,6 +92,12 @@ android {
         jniLibs {
             useLegacyPackaging = true
             pickFirsts += ['**/libc++_shared.so']
+        }
+        resources {
+            excludes += [
+                'META-INF/**',
+                '**/kotlin/**'
+            ]
         }
     }
 
@@ -99,7 +113,7 @@ repositories {
 }
 
 dependencies {
-    // Local FFmpeg AAR
+    // Local FFmpeg Kit AAR
     implementation(name: "ffmpeg-kit-lts-ndk-r25-16k", ext: "aar")
 
     // Existing local AAR
