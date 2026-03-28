@@ -811,6 +811,29 @@ class AudioPlayerHandler extends BaseAudioHandler
     }
   }
 
+  /// Resolve effective queue index taking shuffle mode into account.
+  int _getQueueIndex(int currentIndex, {bool shuffleModeEnabled = false}) {
+    final effectiveIndices = _player.effectiveIndices ?? [];
+    final shuffleIndicesInv = List.filled(effectiveIndices.length, 0);
+
+    for (var i = 0; i < effectiveIndices.length; i++) {
+      shuffleIndicesInv[effectiveIndices[i]] = i;
+    }
+
+    return (shuffleModeEnabled && (currentIndex < shuffleIndicesInv.length))
+        ? shuffleIndicesInv[currentIndex]
+        : currentIndex;
+  }
+
+  Future<void> _loadEmptyPlaylist() async {
+    try {
+      Logger.root.info('Loading empty playlist...');
+      await _player.setAudioSource(_playlist);
+    } catch (e) {
+      Logger.root.severe('Error loading empty playlist: $e');
+    }
+  }
+
   Future<List<AudioSource>> _itemsToSources(
     List<MediaItem> mediaItems, {
     bool forceOriginal = false,
@@ -882,7 +905,8 @@ class AudioPlayerHandler extends BaseAudioHandler
     // 2) tempDir/surround/<trackId>.<ext>
     try {
       final tempDir = await getTemporaryDirectory();
-      final tempPath = p.join(tempDir.path, 'surround', '${mediaItem.id}.$extension');
+      final tempPath =
+          p.join(tempDir.path, 'surround', '${mediaItem.id}.$extension');
       final tempFile = File(tempPath);
       if (await tempFile.exists()) {
         return tempFile.path;
@@ -892,7 +916,8 @@ class AudioPlayerHandler extends BaseAudioHandler
     // 3) docsDir/surround/<trackId>.<ext>
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final docsPath = p.join(docsDir.path, 'surround', '${mediaItem.id}.$extension');
+      final docsPath =
+          p.join(docsDir.path, 'surround', '${mediaItem.id}.$extension');
       final docsFile = File(docsPath);
       if (await docsFile.exists()) {
         return docsFile.path;
@@ -903,7 +928,8 @@ class AudioPlayerHandler extends BaseAudioHandler
     try {
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
-        final extPath = p.join(extDir.path, 'surround', '${mediaItem.id}.$extension');
+        final extPath =
+            p.join(extDir.path, 'surround', '${mediaItem.id}.$extension');
         final extFile = File(extPath);
         if (await extFile.exists()) {
           return extFile.path;
@@ -952,7 +978,7 @@ class AudioPlayerHandler extends BaseAudioHandler
           'trackId': mediaItem.id,
           'inputPath': inputPath,
           'outputMode': outputMode,
-          'preset': 'balanced',
+          'preset': settings.surroundPreset,
           'overwrite': true,
           'persistent': true,
           'debugPassthrough': false,
@@ -1214,9 +1240,7 @@ class AudioPlayerHandler extends BaseAudioHandler
             (mi) => MediaItemConverter.mediaItemToMap(mi),
           )
           .toList(),
-      'position': (_nativeAc3Active
-              ? _nativeEstimatedPosition
-              : _player.position)
+      'position': (_nativeAc3Active ? _nativeEstimatedPosition : _player.position)
           .inMilliseconds,
       'queueSource': (queueSource ?? QueueSource()).toJson(),
       'loopMode': LoopMode.values.indexOf(_player.loopMode),
