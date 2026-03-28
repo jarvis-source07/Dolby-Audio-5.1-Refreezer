@@ -103,7 +103,7 @@ class AudioPlayerHandler extends BaseAudioHandler
     if (_nativeStartedAt == null) {
       return _nativeBasePosition;
     }
-    return _nativeBasePosition.add(DateTime.now().difference(_nativeStartedAt!));
+    return _nativeBasePosition + DateTime.now().difference(_nativeStartedAt!);
   }
 
   Future<void> _init() async {
