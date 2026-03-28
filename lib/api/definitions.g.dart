@@ -36,6 +36,9 @@ Track _$TrackFromJson(Map<String, dynamic> json) => Track(
           : Track.fromJson(json['fallback'] as Map<String, dynamic>),
       playbackDetailsFallback:
           json['playbackDetailsFallback'] as List<dynamic>?,
+      surroundTsPath: json['surroundTsPath'] as String?,
+      surroundReady: json['surroundReady'] as bool?,
+      surroundPreset: json['surroundPreset'] as String?,
     );
 
 Map<String, dynamic> _$TrackToJson(Track instance) => <String, dynamic>{
@@ -55,6 +58,9 @@ Map<String, dynamic> _$TrackToJson(Track instance) => <String, dynamic>{
       'fallback': instance.fallback,
       'playbackDetails': instance.playbackDetails,
       'playbackDetailsFallback': instance.playbackDetailsFallback,
+      'surroundTsPath': instance.surroundTsPath,
+      'surroundReady': instance.surroundReady,
+      'surroundPreset': instance.surroundPreset,
     };
 
 Album _$AlbumFromJson(Map<String, dynamic> json) => Album(

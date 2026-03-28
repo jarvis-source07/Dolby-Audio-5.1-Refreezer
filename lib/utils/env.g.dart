@@ -11,21 +11,21 @@ part of 'env.dart';
 // generated_from: .env
 final class _Env {
   static const List<int> _enviedkeydeezerClientId = <int>[
-    2627341749,
-    183518288,
-    2259470412,
-    1748031784,
-    2440435748,
-    1402048447,
+    1039223639,
+    1618068024,
+    1175455998,
+    3136425130,
+    463853431,
+    3746927844,
   ];
 
   static const List<int> _envieddatadeezerClientId = <int>[
-    2627341700,
-    183518306,
-    2259470463,
-    1748031772,
-    2440435729,
-    1402048393,
+    1039223654,
+    1618067978,
+    1175455949,
+    3136425118,
+    463853378,
+    3746927826,
   ];
 
   static final String deezerClientId = String.fromCharCodes(List<int>.generate(
@@ -35,21 +35,21 @@ final class _Env {
   ).map((int i) => _envieddatadeezerClientId[i] ^ _enviedkeydeezerClientId[i]));
 
   static const List<int> _enviedkeydeezerClientSecret = <int>[
-    3617508148,
-    3454089546,
-    1950971876,
-    2463953131,
-    1056552781,
-    2668020581,
+    2920493838,
+    1147083351,
+    413820956,
+    291057055,
+    1073212564,
+    1484209395,
   ];
 
   static const List<int> _envieddatadeezerClientSecret = <int>[
-    3617508181,
-    3454089512,
-    1950971783,
-    2463953039,
-    1056552744,
-    2668020483,
+    2920493935,
+    1147083317,
+    413821055,
+    291057147,
+    1073212657,
+    1484209301,
   ];
 
   static final String deezerClientSecret = String.fromCharCodes(
@@ -61,21 +61,21 @@ final class _Env {
           _envieddatadeezerClientSecret[i] ^ _enviedkeydeezerClientSecret[i]));
 
   static const List<int> _enviedkeylastFmApiKey = <int>[
-    821757968,
-    61716852,
-    3909798531,
-    1227504732,
-    2135858314,
-    2694233968,
+    1726091862,
+    1931811993,
+    2652868866,
+    3682321611,
+    1113164879,
+    347481805,
   ];
 
   static const List<int> _envieddatalastFmApiKey = <int>[
-    821757985,
-    61716806,
-    3909798576,
-    1227504744,
-    2135858367,
-    2694233926,
+    1726091879,
+    1931812011,
+    2652868913,
+    3682321663,
+    1113164922,
+    347481851,
   ];
 
   static final String lastFmApiKey = String.fromCharCodes(List<int>.generate(
@@ -85,21 +85,21 @@ final class _Env {
   ).map((int i) => _envieddatalastFmApiKey[i] ^ _enviedkeylastFmApiKey[i]));
 
   static const List<int> _enviedkeylastFmApiSecret = <int>[
-    1975942497,
-    2517468511,
-    1400112166,
-    4213190767,
-    524176404,
-    3227126028,
+    2873502035,
+    3144677133,
+    1737784723,
+    3050012157,
+    3043041820,
+    1348329290,
   ];
 
   static const List<int> _envieddatalastFmApiSecret = <int>[
-    1975942400,
-    2517468477,
-    1400112197,
-    4213190667,
-    524176497,
-    3227126122,
+    2873502002,
+    3144677231,
+    1737784816,
+    3050012057,
+    3043041913,
+    1348329260,
   ];
 
   static final String lastFmApiSecret = String.fromCharCodes(List<int>.generate(
