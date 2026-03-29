@@ -99,6 +99,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   DateTime? _nativeStartedAt;
   Timer? _nativeProgressTimer;
 
+  // Background surround generation tracking
+  final Set<String> _surroundGenerationInFlight = <String>{};
+
   Duration get _nativeEstimatedPosition {
     if (_nativeStartedAt == null) {
       return _nativeBasePosition;
@@ -190,6 +193,9 @@ class AudioPlayerHandler extends BaseAudioHandler
 
       _saveQueueToFile();
       _addToHistory(item);
+
+      _fireAndForgetSurroundGeneration(item);
+      _fireAndForgetSurroundGenerationForNextTrack();
 
       // If user was in playing state and switched track while native was active,
       // stop native and start new track according to current mode.
@@ -287,20 +293,25 @@ class AudioPlayerHandler extends BaseAudioHandler
       return;
     }
 
-    // Try native AC3 first if surround mode enabled and current track not bypassed.
+    // Native surround only if artifact already exists and is ready.
     final bool nativeStarted =
         !_nativeBypassForCurrentTrack && await _tryStartNativeAc3(currentItem);
 
     if (nativeStarted) {
+      _fireAndForgetSurroundGenerationForNextTrack();
       return;
     }
 
-    // Fallback to normal just_audio playback.
+    // Fallback immediately to normal playback (no waiting, no restart).
     await _stopNativeAc3(updateState: false);
     await _syncJustAudioToStoredPositionIfNeeded();
     await _player.setVolume(1.0);
     await _player.play();
     _broadcastState(_player.playbackEvent);
+
+    // Generate current + next surround artifacts in background.
+    _fireAndForgetSurroundGeneration(currentItem);
+    _fireAndForgetSurroundGenerationForNextTrack();
   }
 
   @override
@@ -349,7 +360,11 @@ class AudioPlayerHandler extends BaseAudioHandler
         await _player.setVolume(1.0);
         await _player.seek(pos);
       } catch (e, st) {
-        Logger.root.warning('Failed to sync player position after native pause', e, st);
+        Logger.root.warning(
+          'Failed to sync player position after native pause',
+          e,
+          st,
+        );
       }
 
       await _player.pause();
@@ -691,16 +706,7 @@ class AudioPlayerHandler extends BaseAudioHandler
       final duration = item?.duration;
       if (duration != null && _nativeEstimatedPosition >= duration) {
         Logger.root.info('Native AC3 playback reached track duration');
-        await _stopNativeAc3(updateState: false);
-        _desiredPlaying = false;
-        playbackState.add(
-          playbackState.value.copyWith(
-            playing: false,
-            processingState: AudioProcessingState.completed,
-            updatePosition: duration,
-            bufferedPosition: duration,
-          ),
-        );
+        await _advanceAfterNativeCompletion(duration);
       }
     });
   }
@@ -717,8 +723,7 @@ class AudioPlayerHandler extends BaseAudioHandler
       return false;
     }
 
-    // If we already have a stored mid-track position, raw native AC3 restart
-    // can't resume precisely. In that case fall back to just_audio.
+    // If resuming from a mid-track position, use just_audio fallback.
     if (_nativeBasePosition > Duration.zero) {
       Logger.root.info(
         'Stored native position exists for ${currentItem.id} (${_nativeBasePosition.inMilliseconds} ms), using normal playback fallback.',
@@ -749,42 +754,27 @@ class AudioPlayerHandler extends BaseAudioHandler
       return false;
     }
 
+    // IMPORTANT:
+    // Do not block playback by generating here.
+    // Only use native if artifact already exists.
     String? ac3Path = await _getSurroundArtifactPath(
       currentItem,
       extension: 'ac3',
     );
 
     if (ac3Path == null) {
-      final String? originalUrl = await _getTrackUrl(currentItem);
-      if (originalUrl == null) {
-        return false;
-      }
-
-      final bool generated = await _generateSurroundNow(
-        currentItem,
-        originalUrl,
-        outputMode: 'ac3',
-      );
-
-      if (generated) {
-        ac3Path = await _getSurroundArtifactPath(
-          currentItem,
-          extension: 'ac3',
-        );
-      }
-    }
-
-    if (ac3Path == null) {
+      _fireAndForgetSurroundGeneration(currentItem);
       Logger.root.info(
-        'No AC3 surround artifact available for ${currentItem.id}, using normal playback.',
+        'No ready AC3 artifact for ${currentItem.id}, staying on normal playback for now.',
       );
       return false;
     }
 
     final ac3File = File(ac3Path);
     if (!await ac3File.exists() || await ac3File.length() <= 0) {
+      _fireAndForgetSurroundGeneration(currentItem);
       Logger.root.warning(
-        'AC3 artifact path exists but file missing/empty for ${currentItem.id}: $ac3Path',
+        'AC3 artifact missing/empty for ${currentItem.id}: $ac3Path',
       );
       return false;
     }
@@ -793,7 +783,6 @@ class AudioPlayerHandler extends BaseAudioHandler
     final double previousVolume = _player.volume;
 
     try {
-      // Pause shell player before starting native output.
       if (wasPlaying) {
         await _player.pause();
       }
@@ -812,13 +801,11 @@ class AudioPlayerHandler extends BaseAudioHandler
         return false;
       }
 
-      // Native path active, mute shell player.
       await _player.setVolume(0.0);
 
       _nativeAc3Active = true;
       _nativeTrackId = currentItem.id;
       _nativeStartedAt = DateTime.now();
-      // Fresh native start begins from zero.
       _nativeBasePosition = Duration.zero;
 
       _startNativeProgressTicker();
@@ -828,6 +815,7 @@ class AudioPlayerHandler extends BaseAudioHandler
         'Native AC3 playback started for ${currentItem.id}: $ac3Path',
       );
 
+      _fireAndForgetSurroundGenerationForNextTrack();
       return true;
     } catch (e, st) {
       Logger.root.warning(
@@ -888,6 +876,116 @@ class AudioPlayerHandler extends BaseAudioHandler
 
     // After syncing to normal player, clear stored native resume marker.
     _nativeBasePosition = Duration.zero;
+  }
+
+  void _fireAndForgetSurroundGeneration(MediaItem item) {
+    if (settings.playbackMode != PlaybackMode.surround) return;
+    if (_surroundGenerationInFlight.contains(item.id)) return;
+    unawaited(_ensureSurroundArtifactInBackground(item));
+  }
+
+  void _fireAndForgetSurroundGenerationForNextTrack() {
+    if (settings.playbackMode != PlaybackMode.surround) return;
+    if (queue.value.isEmpty) return;
+
+    final current = mediaItem.value;
+    if (current == null) return;
+
+    final int currentQueueIndex =
+        queue.value.indexWhere((m) => m.id == current.id);
+    if (currentQueueIndex == -1) return;
+
+    int nextQueueIndex = currentQueueIndex + 1;
+
+    if (nextQueueIndex >= queue.value.length) {
+      if (_player.loopMode == LoopMode.all && queue.value.isNotEmpty) {
+        nextQueueIndex = 0;
+      } else {
+        return;
+      }
+    }
+
+    final nextItem = queue.value[nextQueueIndex];
+    _fireAndForgetSurroundGeneration(nextItem);
+  }
+
+  Future<void> _ensureSurroundArtifactInBackground(MediaItem item) async {
+    if (settings.playbackMode != PlaybackMode.surround) return;
+    if (_surroundGenerationInFlight.contains(item.id)) return;
+
+    _surroundGenerationInFlight.add(item.id);
+
+    try {
+      final existing = await _getSurroundArtifactPath(
+        item,
+        extension: 'ac3',
+      );
+
+      if (existing != null) {
+        return;
+      }
+
+      final String? originalUrl = await _getTrackUrl(item);
+      if (originalUrl == null || originalUrl.trim().isEmpty) {
+        Logger.root.warning(
+          'Cannot generate surround artifact: no track URL for ${item.id}',
+        );
+        return;
+      }
+
+      Logger.root.info(
+        'Background generating surround artifact for ${item.id}',
+      );
+
+      await _generateSurroundNow(
+        item,
+        originalUrl,
+        outputMode: 'ac3',
+      );
+    } catch (e, st) {
+      Logger.root.warning(
+        'Background surround generation failed for ${item.id}',
+        e,
+        st,
+      );
+    } finally {
+      _surroundGenerationInFlight.remove(item.id);
+    }
+  }
+
+  Future<void> _advanceAfterNativeCompletion(Duration duration) async {
+    final int queueIndex = playbackState.value.queueIndex ?? currentIndex;
+    final bool hasNext = queueIndex + 1 < queue.value.length;
+    final bool repeatAll = _player.loopMode == LoopMode.all;
+    final bool repeatOne = _player.loopMode == LoopMode.one;
+
+    _nativeBasePosition = Duration.zero;
+    await _stopNativeAc3(updateState: false);
+
+    if (_desiredPlaying && repeatOne) {
+      await skipToQueueItem(queueIndex);
+      return;
+    }
+
+    if (_desiredPlaying && hasNext) {
+      await skipToNext();
+      return;
+    }
+
+    if (_desiredPlaying && !hasNext && repeatAll && queue.value.isNotEmpty) {
+      await skipToQueueItem(0);
+      return;
+    }
+
+    _desiredPlaying = false;
+    playbackState.add(
+      playbackState.value.copyWith(
+        playing: false,
+        processingState: AudioProcessingState.completed,
+        updatePosition: duration,
+        bufferedPosition: duration,
+      ),
+    );
   }
 
   /// Resolve effective queue index taking shuffle mode into account.

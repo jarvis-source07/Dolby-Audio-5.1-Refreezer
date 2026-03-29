@@ -204,7 +204,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
     /**
      * Step 1:
-     * Stereo -> derived 5.1-style matrix -> AC3 encode
+     * Stereo -> matrix-derived 5.1-style -> AC3 encode
      */
     @Override
     protected Result renderToAc3Master(Config config, File inputFile, File ac3OutputFile) {
@@ -353,10 +353,9 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
      * Builds ffmpeg command for:
      * stereo -> matrix-derived 5.1 -> AC3
      *
-     * Important:
-     * For FFmpeg `pan=5.1`, use BL/BR (not SL/SR).
-     * SL/SR belong to 5.1(side), which was causing:
-     * "Channel ... does not exist in the chosen layout"
+     * NOTE:
+     * We intentionally use stereo-copy style rear channels for music:
+     * rear = copied front stereo (with lower gain), not L-R ambience extraction.
      */
     protected List<String> buildStereoToAc3Command(
             Config config,
@@ -416,41 +415,44 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     }
 
     /**
-     * Starter surround matrix presets.
-     * These are not final audiophile tunings.
+     * Music-friendly presets.
      *
-     * FIX:
-     * pan=5.1 must use BL/BR instead of SL/SR.
+     * BALANCED  = closest to Sony USB stereo-to-rear feeling
+     * WIDE      = stronger rear copy
+     * CINEMATIC = slight center/LFE fill, still rear stereo copy
      */
     protected String buildPanFilter(Preset preset) {
         switch (preset) {
             case WIDE:
+                // Stronger rear copy for bigger/wider music feel
                 return "pan=5.1|"
-                        + "FL=0.95*c0+0.05*c1|"
-                        + "FR=0.95*c1+0.05*c0|"
-                        + "FC=0.22*c0+0.22*c1|"
-                        + "LFE=0.18*c0+0.18*c1|"
-                        + "BL=0.78*c0-0.22*c1|"
-                        + "BR=0.78*c1-0.22*c0";
+                        + "FL=1.00*c0|"
+                        + "FR=1.00*c1|"
+                        + "FC=0.00*c0|"
+                        + "LFE=0.00*c0|"
+                        + "BL=0.85*c0|"
+                        + "BR=0.85*c1";
 
             case CINEMATIC:
+                // Music-friendly, still natural, but slightly fuller front image
                 return "pan=5.1|"
-                        + "FL=0.82*c0+0.18*c1|"
-                        + "FR=0.82*c1+0.18*c0|"
-                        + "FC=0.45*c0+0.45*c1|"
-                        + "LFE=0.28*c0+0.28*c1|"
-                        + "BL=0.70*c0-0.30*c1|"
-                        + "BR=0.70*c1-0.30*c0";
+                        + "FL=1.00*c0|"
+                        + "FR=1.00*c1|"
+                        + "FC=0.10*c0+0.10*c1|"
+                        + "LFE=0.08*c0+0.08*c1|"
+                        + "BL=0.75*c0|"
+                        + "BR=0.75*c1";
 
             case BALANCED:
             default:
+                // Closest to Sony USB stereo-to-rear experience
                 return "pan=5.1|"
-                        + "FL=0.90*c0+0.10*c1|"
-                        + "FR=0.90*c1+0.10*c0|"
-                        + "FC=0.35*c0+0.35*c1|"
-                        + "LFE=0.20*c0+0.20*c1|"
-                        + "BL=0.60*c0-0.20*c1|"
-                        + "BR=0.60*c1-0.20*c0";
+                        + "FL=1.00*c0|"
+                        + "FR=1.00*c1|"
+                        + "FC=0.00*c0|"
+                        + "LFE=0.00*c0|"
+                        + "BL=0.70*c0|"
+                        + "BR=0.70*c1";
         }
     }
 
