@@ -48,6 +48,9 @@ public class MainActivity extends AudioServiceActivity {
     private static final String CHANNEL = "r.r.refreezer/native";
     private static final String EVENT_CHANNEL = "r.r.refreezer/downloads";
 
+    private static final String TAG_SURROUND = "SURROUND";
+    private static final String TAG_NATIVE_AC3 = "NATIVE_AC3";
+
     EventChannel.EventSink eventSink;
 
     boolean serviceBound = false;
@@ -284,7 +287,8 @@ public class MainActivity extends AudioServiceActivity {
 
                 boolean exists;
                 if (path != null && !path.trim().isEmpty()) {
-                    exists = new File(path).exists();
+                    File file = new File(path);
+                    exists = file.exists() && file.isFile() && file.length() > 0;
                 } else {
                     exists = findExistingSurroundPathSmart(trackId, extension) != null;
                 }
@@ -430,7 +434,7 @@ public class MainActivity extends AudioServiceActivity {
 
                         mainHandler.post(() -> result.success(out));
                     } catch (Throwable t) {
-                        Log.e("SURROUND", "generateSurroundNow failed", t);
+                        Log.e(TAG_SURROUND, "generateSurroundNow failed", t);
                         final HashMap<String, Object> out = errorMap(
                                 "generateSurroundNow throwable: " + t.getClass().getName() + ": " + t.getMessage()
                         );
@@ -463,12 +467,13 @@ public class MainActivity extends AudioServiceActivity {
                 }
 
                 File file = new File(path);
-                if (!file.exists() || !file.isFile()) {
-                    result.error("file_missing", "AC3 file not found", null);
+                if (!file.exists() || !file.isFile() || file.length() <= 0) {
+                    result.error("file_missing", "AC3 file not found or empty", null);
                     return;
                 }
 
-                if (!isDirectAc3PlaybackSupported(sampleRateHz)) {
+                final int channelMask = resolveBestDirectAc3ChannelMask(sampleRateHz);
+                if (channelMask == 0) {
                     result.error(
                             "direct_playback_unsupported",
                             "Direct AC3 playback is not supported on the current route/device",
@@ -481,10 +486,10 @@ public class MainActivity extends AudioServiceActivity {
                     if (nativeAc3Player == null) {
                         nativeAc3Player = new NativeAc3Player();
                     }
-                    nativeAc3Player.start(path, sampleRateHz);
+                    nativeAc3Player.start(path, sampleRateHz, channelMask);
                     result.success(true);
                 } catch (Exception e) {
-                    Log.e("NATIVE_AC3", "playNativeAc3 failed", e);
+                    Log.e(TAG_NATIVE_AC3, "playNativeAc3 failed", e);
                     result.error("native_ac3_error", e.getMessage(), null);
                 }
                 return;
@@ -495,7 +500,7 @@ public class MainActivity extends AudioServiceActivity {
                     stopNativeAc3();
                     result.success(true);
                 } catch (Exception e) {
-                    Log.e("NATIVE_AC3", "stopNativeAc3 failed", e);
+                    Log.e(TAG_NATIVE_AC3, "stopNativeAc3 failed", e);
                     result.error("native_ac3_error", e.getMessage(), null);
                 }
                 return;
@@ -578,7 +583,7 @@ public class MainActivity extends AudioServiceActivity {
             sc.init(null, trustAllCerts, new java.security.SecureRandom());
             HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            Log.e(this.getLocalClassName(), e.getMessage());
+            Log.e(this.getLocalClassName(), e.getMessage() == null ? "SSL init failed" : e.getMessage());
         }
     }
 
@@ -751,7 +756,7 @@ public class MainActivity extends AudioServiceActivity {
             }
             return appFlutterDir;
         } catch (Exception e) {
-            Log.e("SURROUND", "Failed to resolve app_flutter dir", e);
+            Log.e(TAG_SURROUND, "Failed to resolve app_flutter dir", e);
             return null;
         }
     }
@@ -779,7 +784,7 @@ public class MainActivity extends AudioServiceActivity {
 
             return surroundDir;
         } catch (Exception e) {
-            Log.e("SURROUND", "Failed to get surround directory", e);
+            Log.e(TAG_SURROUND, "Failed to get surround directory", e);
             return null;
         }
     }
@@ -805,17 +810,17 @@ public class MainActivity extends AudioServiceActivity {
         if (trackId == null || trackId.trim().isEmpty()) return null;
 
         File tempFile = buildSurroundFile(trackId, extension, false, false);
-        if (tempFile != null && tempFile.exists()) {
+        if (tempFile != null && tempFile.exists() && tempFile.isFile() && tempFile.length() > 0) {
             return tempFile.getAbsolutePath();
         }
 
         File docsFile = buildSurroundFile(trackId, extension, true, false);
-        if (docsFile != null && docsFile.exists()) {
+        if (docsFile != null && docsFile.exists() && docsFile.isFile() && docsFile.length() > 0) {
             return docsFile.getAbsolutePath();
         }
 
         File externalFile = buildSurroundFile(trackId, extension, false, true);
-        if (externalFile != null && externalFile.exists()) {
+        if (externalFile != null && externalFile.exists() && externalFile.isFile() && externalFile.length() > 0) {
             return externalFile.getAbsolutePath();
         }
 
@@ -957,13 +962,38 @@ public class MainActivity extends AudioServiceActivity {
     // --------------------------------------
 
     private boolean isDirectAc3PlaybackSupported(int sampleRateHz) {
+        return resolveBestDirectAc3ChannelMask(sampleRateHz) != 0;
+    }
+
+    private int resolveBestDirectAc3ChannelMask(int sampleRateHz) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return 0;
+        }
+
+        // Prefer true 5.1 direct playback first.
+        if (isDirectAc3PlaybackSupportedForMask(sampleRateHz, AudioFormat.CHANNEL_OUT_5POINT1)) {
+            Log.i(TAG_NATIVE_AC3, "Direct AC3 supported with CHANNEL_OUT_5POINT1 @ " + sampleRateHz);
+            return AudioFormat.CHANNEL_OUT_5POINT1;
+        }
+
+        // Fallback: some devices/routes only advertise stereo mask for encoded direct output.
+        if (isDirectAc3PlaybackSupportedForMask(sampleRateHz, AudioFormat.CHANNEL_OUT_STEREO)) {
+            Log.i(TAG_NATIVE_AC3, "Direct AC3 supported with CHANNEL_OUT_STEREO @ " + sampleRateHz);
+            return AudioFormat.CHANNEL_OUT_STEREO;
+        }
+
+        Log.w(TAG_NATIVE_AC3, "Direct AC3 not supported for sampleRate=" + sampleRateHz);
+        return 0;
+    }
+
+    private boolean isDirectAc3PlaybackSupportedForMask(int sampleRateHz, int channelMask) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return false;
         }
 
         try {
             AudioFormat format = new AudioFormat.Builder()
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .setChannelMask(channelMask)
                     .setEncoding(AudioFormat.ENCODING_AC3)
                     .setSampleRate(sampleRateHz)
                     .build();
@@ -973,11 +1003,23 @@ public class MainActivity extends AudioServiceActivity {
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build();
 
-            return AudioTrack.isDirectPlaybackSupported(format, attr);
+            boolean supported = AudioTrack.isDirectPlaybackSupported(format, attr);
+            Log.d(
+                    TAG_NATIVE_AC3,
+                    "isDirectPlaybackSupported(mask=" + channelMaskToString(channelMask)
+                            + ", sampleRate=" + sampleRateHz + ") => " + supported
+            );
+            return supported;
         } catch (Exception e) {
-            Log.e("NATIVE_AC3", "isDirectAc3PlaybackSupported failed", e);
+            Log.e(TAG_NATIVE_AC3, "isDirectAc3PlaybackSupportedForMask failed", e);
             return false;
         }
+    }
+
+    private String channelMaskToString(int mask) {
+        if (mask == AudioFormat.CHANNEL_OUT_5POINT1) return "CHANNEL_OUT_5POINT1";
+        if (mask == AudioFormat.CHANNEL_OUT_STEREO) return "CHANNEL_OUT_STEREO";
+        return "0x" + Integer.toHexString(mask);
     }
 
     private void stopNativeAc3() {
@@ -999,21 +1041,23 @@ public class MainActivity extends AudioServiceActivity {
         private volatile boolean playing = false;
         private String currentPath;
         private int currentSampleRate = 48000;
+        private int currentChannelMask = AudioFormat.CHANNEL_OUT_5POINT1;
 
-        synchronized void start(@NonNull String path, int sampleRateHz) throws Exception {
+        synchronized void start(@NonNull String path, int sampleRateHz, int channelMask) throws Exception {
             stop();
 
             File file = new File(path);
-            if (!file.exists() || !file.isFile()) {
-                throw new IllegalArgumentException("AC3 file not found: " + path);
+            if (!file.exists() || !file.isFile() || file.length() <= 0) {
+                throw new IllegalArgumentException("AC3 file not found or empty: " + path);
             }
 
             currentPath = path;
             currentSampleRate = sampleRateHz;
+            currentChannelMask = channelMask;
             stopRequested = false;
 
             AudioFormat format = new AudioFormat.Builder()
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .setChannelMask(channelMask)
                     .setEncoding(AudioFormat.ENCODING_AC3)
                     .setSampleRate(sampleRateHz)
                     .build();
@@ -1025,7 +1069,7 @@ public class MainActivity extends AudioServiceActivity {
 
             int bufferSize = AudioTrack.getMinBufferSize(
                     sampleRateHz,
-                    AudioFormat.CHANNEL_OUT_STEREO,
+                    channelMask,
                     AudioFormat.ENCODING_AC3
             );
             if (bufferSize <= 0) {
@@ -1033,6 +1077,14 @@ public class MainActivity extends AudioServiceActivity {
             } else {
                 bufferSize = Math.max(bufferSize, 64 * 1024);
             }
+
+            Log.i(
+                    TAG,
+                    "Starting direct AC3 playback path=" + path
+                            + ", sampleRate=" + sampleRateHz
+                            + ", channelMask=0x" + Integer.toHexString(channelMask)
+                            + ", bufferSize=" + bufferSize
+            );
 
             audioTrack = new AudioTrack.Builder()
                     .setAudioAttributes(attr)
@@ -1053,17 +1105,29 @@ public class MainActivity extends AudioServiceActivity {
                 BufferedInputStream inputStream = null;
                 try {
                     inputStream = new BufferedInputStream(new FileInputStream(currentPath));
-                    byte[] buffer = new byte[4096];
+                    byte[] buffer = new byte[16 * 1024];
 
                     while (!stopRequested) {
                         int read = inputStream.read(buffer);
                         if (read == -1) {
+                            Log.i(TAG, "Reached EOF for direct AC3 stream");
                             break;
                         }
 
                         int written = 0;
                         while (written < read && !stopRequested) {
-                            int n = audioTrack.write(buffer, written, read - written);
+                            final int n;
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                n = audioTrack.write(
+                                        buffer,
+                                        written,
+                                        read - written,
+                                        AudioTrack.WRITE_BLOCKING
+                                );
+                            } else {
+                                n = audioTrack.write(buffer, written, read - written);
+                            }
+
                             if (n < 0) {
                                 throw new RuntimeException("AudioTrack write failed: " + n);
                             }
@@ -1071,7 +1135,9 @@ public class MainActivity extends AudioServiceActivity {
                         }
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Native AC3 playback failed", e);
+                    if (!stopRequested) {
+                        Log.e(TAG, "Native AC3 playback failed", e);
+                    }
                 } finally {
                     if (inputStream != null) {
                         try {
@@ -1081,6 +1147,7 @@ public class MainActivity extends AudioServiceActivity {
                     }
                     releaseTrack();
                     playing = false;
+                    Log.i(TAG, "Direct AC3 playback thread finished");
                 }
             }, "NativeAc3PlaybackThread");
 

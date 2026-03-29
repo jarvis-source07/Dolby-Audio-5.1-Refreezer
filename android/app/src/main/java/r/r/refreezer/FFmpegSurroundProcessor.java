@@ -353,11 +353,10 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
      * Builds ffmpeg command for:
      * stereo -> matrix-derived 5.1 -> AC3
      *
-     * Starter matrix:
-     * - balanced front image
-     * - subtle center
-     * - modest LFE
-     * - decorrelated-ish rear feel using cross subtraction
+     * Important:
+     * For FFmpeg `pan=5.1`, use BL/BR (not SL/SR).
+     * SL/SR belong to 5.1(side), which was causing:
+     * "Channel ... does not exist in the chosen layout"
      */
     protected List<String> buildStereoToAc3Command(
             Config config,
@@ -419,6 +418,9 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     /**
      * Starter surround matrix presets.
      * These are not final audiophile tunings.
+     *
+     * FIX:
+     * pan=5.1 must use BL/BR instead of SL/SR.
      */
     protected String buildPanFilter(Preset preset) {
         switch (preset) {
@@ -428,8 +430,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                         + "FR=0.95*c1+0.05*c0|"
                         + "FC=0.22*c0+0.22*c1|"
                         + "LFE=0.18*c0+0.18*c1|"
-                        + "SL=0.78*c0-0.22*c1|"
-                        + "SR=0.78*c1-0.22*c0";
+                        + "BL=0.78*c0-0.22*c1|"
+                        + "BR=0.78*c1-0.22*c0";
 
             case CINEMATIC:
                 return "pan=5.1|"
@@ -437,8 +439,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                         + "FR=0.82*c1+0.18*c0|"
                         + "FC=0.45*c0+0.45*c1|"
                         + "LFE=0.28*c0+0.28*c1|"
-                        + "SL=0.70*c0-0.30*c1|"
-                        + "SR=0.70*c1-0.30*c0";
+                        + "BL=0.70*c0-0.30*c1|"
+                        + "BR=0.70*c1-0.30*c0";
 
             case BALANCED:
             default:
@@ -447,8 +449,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                         + "FR=0.90*c1+0.10*c0|"
                         + "FC=0.35*c0+0.35*c1|"
                         + "LFE=0.20*c0+0.20*c1|"
-                        + "SL=0.60*c0-0.20*c1|"
-                        + "SR=0.60*c1-0.20*c0";
+                        + "BL=0.60*c0-0.20*c1|"
+                        + "BR=0.60*c1-0.20*c0";
         }
     }
 
@@ -470,11 +472,24 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
             String output = "";
             try {
-                output = "";
+                String sessionOutput = session.getOutput();
+                if (sessionOutput != null) {
+                    output = sessionOutput;
+                }
             } catch (Throwable ignored) {
             }
 
-            Log.d(TAG, "FFmpegKit exitCode=" + exitCode);
+            if (exitCode == 0) {
+                Log.d(TAG, "FFmpegKit exitCode=0");
+                if (!output.trim().isEmpty()) {
+                    Log.d(TAG, "FFmpegKit output:\n" + output);
+                }
+            } else {
+                Log.e(TAG, "FFmpegKit exitCode=" + exitCode);
+                if (!output.trim().isEmpty()) {
+                    Log.e(TAG, "FFmpegKit failure output:\n" + output);
+                }
+            }
 
             return new ProcessRunResult(exitCode, output, output);
         } catch (Throwable t) {

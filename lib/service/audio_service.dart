@@ -281,6 +281,8 @@ class AudioPlayerHandler extends BaseAudioHandler
   Future<void> _playCurrentAccordingToMode() async {
     final currentItem = mediaItem.value;
     if (currentItem == null) {
+      await _syncJustAudioToStoredPositionIfNeeded();
+      await _player.setVolume(1.0);
       await _player.play();
       return;
     }
@@ -295,8 +297,10 @@ class AudioPlayerHandler extends BaseAudioHandler
 
     // Fallback to normal just_audio playback.
     await _stopNativeAc3(updateState: false);
+    await _syncJustAudioToStoredPositionIfNeeded();
     await _player.setVolume(1.0);
     await _player.play();
+    _broadcastState(_player.playbackEvent);
   }
 
   @override
@@ -313,6 +317,7 @@ class AudioPlayerHandler extends BaseAudioHandler
     if (index != -1) {
       await _stopNativeAc3(updateState: false);
       _nativeBypassForCurrentTrack = false;
+      _nativeBasePosition = Duration.zero;
       await _player.seek(
         Duration.zero,
         index:
@@ -332,10 +337,23 @@ class AudioPlayerHandler extends BaseAudioHandler
     _desiredPlaying = false;
 
     if (_nativeAc3Active) {
-      _nativeBasePosition = _nativeEstimatedPosition;
+      // Capture current native progress and switch shell player to same spot
+      // so resume doesn't restart from zero or become silent.
+      final Duration pos = _nativeEstimatedPosition;
+      _nativeBasePosition = pos;
       _nativeBypassForCurrentTrack = true;
+
       await _stopNativeAc3(updateState: false);
-      _broadcastNativeState(isPlaying: false);
+
+      try {
+        await _player.setVolume(1.0);
+        await _player.seek(pos);
+      } catch (e, st) {
+        Logger.root.warning('Failed to sync player position after native pause', e, st);
+      }
+
+      await _player.pause();
+      _broadcastState(_player.playbackEvent);
       return;
     }
 
@@ -348,7 +366,9 @@ class AudioPlayerHandler extends BaseAudioHandler
     Logger.root.info('saving queue');
     await _saveQueueToFile();
     await _stopNativeAc3(updateState: false);
+    _nativeBasePosition = Duration.zero;
     Logger.root.info('stopping player');
+    await _player.setVolume(1.0);
     await _player.stop();
     await super.stop();
   }
@@ -422,6 +442,7 @@ class AudioPlayerHandler extends BaseAudioHandler
     final wasPlaying = _desiredPlaying;
     await _stopNativeAc3(updateState: false);
     _nativeBypassForCurrentTrack = false;
+    _nativeBasePosition = Duration.zero;
     await _player.seekToNext();
     if (wasPlaying) {
       await Future.delayed(const Duration(milliseconds: 120));
@@ -436,6 +457,7 @@ class AudioPlayerHandler extends BaseAudioHandler
     final wasPlaying = _desiredPlaying;
     await _stopNativeAc3(updateState: false);
     _nativeBypassForCurrentTrack = false;
+    _nativeBasePosition = Duration.zero;
 
     if ((_player.position.inSeconds) <= 5) {
       await _player.seekToPrevious();
@@ -458,6 +480,7 @@ class AudioPlayerHandler extends BaseAudioHandler
     final wasPlaying = _desiredPlaying;
     await _stopNativeAc3(updateState: false);
     _nativeBypassForCurrentTrack = false;
+    _nativeBasePosition = Duration.zero;
 
     await _player.seek(
       Duration.zero,
@@ -479,7 +502,9 @@ class AudioPlayerHandler extends BaseAudioHandler
       // Native raw AC3 path does not support practical accurate seeking here.
       // So current track falls back to just_audio from the new position.
       _nativeBypassForCurrentTrack = true;
+      _nativeBasePosition = position;
       await _stopNativeAc3(updateState: false);
+      await _player.setVolume(1.0);
       await _player.seek(position);
       _broadcastState(_player.playbackEvent);
       return;
@@ -644,8 +669,7 @@ class AudioPlayerHandler extends BaseAudioHandler
           MediaAction.seekBackward,
         },
         androidCompactActionIndices: const [0, 1, 2],
-        processingState:
-            isPlaying ? AudioProcessingState.ready : AudioProcessingState.ready,
+        processingState: AudioProcessingState.ready,
         playing: isPlaying,
         updatePosition: _nativeEstimatedPosition,
         bufferedPosition: _nativeEstimatedPosition,
@@ -689,6 +713,15 @@ class AudioPlayerHandler extends BaseAudioHandler
     if (_nativeBypassForCurrentTrack) {
       Logger.root.info(
         'Native AC3 bypass enabled for current track ${currentItem.id}, using normal playback.',
+      );
+      return false;
+    }
+
+    // If we already have a stored mid-track position, raw native AC3 restart
+    // can't resume precisely. In that case fall back to just_audio.
+    if (_nativeBasePosition > Duration.zero) {
+      Logger.root.info(
+        'Stored native position exists for ${currentItem.id} (${_nativeBasePosition.inMilliseconds} ms), using normal playback fallback.',
       );
       return false;
     }
@@ -748,9 +781,22 @@ class AudioPlayerHandler extends BaseAudioHandler
       return false;
     }
 
+    final ac3File = File(ac3Path);
+    if (!await ac3File.exists() || await ac3File.length() <= 0) {
+      Logger.root.warning(
+        'AC3 artifact path exists but file missing/empty for ${currentItem.id}: $ac3Path',
+      );
+      return false;
+    }
+
+    final bool wasPlaying = _player.playing;
+    final double previousVolume = _player.volume;
+
     try {
-      await _player.pause();
-      await _player.setVolume(0.0);
+      // Pause shell player before starting native output.
+      if (wasPlaying) {
+        await _player.pause();
+      }
 
       final bool started = await _nativeChannel.invokeMethod<bool>(
             'playNativeAc3',
@@ -762,13 +808,17 @@ class AudioPlayerHandler extends BaseAudioHandler
           false;
 
       if (!started) {
+        await _player.setVolume(previousVolume);
         return false;
       }
+
+      // Native path active, mute shell player.
+      await _player.setVolume(0.0);
 
       _nativeAc3Active = true;
       _nativeTrackId = currentItem.id;
       _nativeStartedAt = DateTime.now();
-      // If this is a fresh surround start, begin from zero.
+      // Fresh native start begins from zero.
       _nativeBasePosition = Duration.zero;
 
       _startNativeProgressTicker();
@@ -785,6 +835,7 @@ class AudioPlayerHandler extends BaseAudioHandler
         e,
         st,
       );
+      await _player.setVolume(previousVolume);
       await _stopNativeAc3(updateState: false);
       return false;
     }
@@ -809,6 +860,34 @@ class AudioPlayerHandler extends BaseAudioHandler
     if (updateState) {
       _broadcastState(_player.playbackEvent);
     }
+  }
+
+  Future<void> _syncJustAudioToStoredPositionIfNeeded() async {
+    if (_nativeBasePosition <= Duration.zero) {
+      return;
+    }
+
+    final Duration target = _nativeBasePosition;
+    final Duration current = _player.position;
+    final int deltaMs = (current - target).inMilliseconds.abs();
+
+    if (deltaMs > 1500) {
+      try {
+        Logger.root.info(
+          'Syncing just_audio position to stored native position: ${target.inMilliseconds} ms',
+        );
+        await _player.seek(target);
+      } catch (e, st) {
+        Logger.root.warning(
+          'Failed to seek just_audio to stored native position',
+          e,
+          st,
+        );
+      }
+    }
+
+    // After syncing to normal player, clear stored native resume marker.
+    _nativeBasePosition = Duration.zero;
   }
 
   /// Resolve effective queue index taking shuffle mode into account.
@@ -891,24 +970,31 @@ class AudioPlayerHandler extends BaseAudioHandler
     MediaItem mediaItem, {
     required String extension,
   }) async {
+    final String ext = extension.toLowerCase().trim();
+
     // 1) Direct path from MediaItem extras (best option)
-    final dynamic extraPath = mediaItem.extras?['surroundTsPath'];
-    if (extraPath is String &&
-        extraPath.trim().isNotEmpty &&
-        extraPath.toLowerCase().endsWith('.$extension')) {
-      final file = File(extraPath);
-      if (await file.exists()) {
-        return file.path;
+    final List<String> extraKeys = ext == 'ac3'
+        ? const ['surroundAc3Path', 'surroundTsPath', 'surroundPath']
+        : const ['surroundTsPath', 'surroundAc3Path', 'surroundPath'];
+
+    for (final key in extraKeys) {
+      final dynamic extraPath = mediaItem.extras?[key];
+      if (extraPath is String &&
+          extraPath.trim().isNotEmpty &&
+          extraPath.toLowerCase().endsWith('.$ext')) {
+        final file = File(extraPath);
+        if (await file.exists() && await file.length() > 0) {
+          return file.path;
+        }
       }
     }
 
     // 2) tempDir/surround/<trackId>.<ext>
     try {
       final tempDir = await getTemporaryDirectory();
-      final tempPath =
-          p.join(tempDir.path, 'surround', '${mediaItem.id}.$extension');
+      final tempPath = p.join(tempDir.path, 'surround', '${mediaItem.id}.$ext');
       final tempFile = File(tempPath);
-      if (await tempFile.exists()) {
+      if (await tempFile.exists() && await tempFile.length() > 0) {
         return tempFile.path;
       }
     } catch (_) {}
@@ -916,10 +1002,9 @@ class AudioPlayerHandler extends BaseAudioHandler
     // 3) docsDir/surround/<trackId>.<ext>
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final docsPath =
-          p.join(docsDir.path, 'surround', '${mediaItem.id}.$extension');
+      final docsPath = p.join(docsDir.path, 'surround', '${mediaItem.id}.$ext');
       final docsFile = File(docsPath);
-      if (await docsFile.exists()) {
+      if (await docsFile.exists() && await docsFile.length() > 0) {
         return docsFile.path;
       }
     } catch (_) {}
@@ -928,10 +1013,9 @@ class AudioPlayerHandler extends BaseAudioHandler
     try {
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
-        final extPath =
-            p.join(extDir.path, 'surround', '${mediaItem.id}.$extension');
+        final extPath = p.join(extDir.path, 'surround', '${mediaItem.id}.$ext');
         final extFile = File(extPath);
-        if (await extFile.exists()) {
+        if (await extFile.exists() && await extFile.length() > 0) {
           return extFile.path;
         }
       }
@@ -942,18 +1026,18 @@ class AudioPlayerHandler extends BaseAudioHandler
       final String? nativeFound =
           await _nativeChannel.invokeMethod<String>('findExistingSurroundPath', {
         'trackId': mediaItem.id,
-        'extension': extension,
+        'extension': ext,
       });
 
       if (nativeFound != null && nativeFound.trim().isNotEmpty) {
         final file = File(nativeFound);
-        if (await file.exists()) {
+        if (await file.exists() && await file.length() > 0) {
           return file.path;
         }
       }
     } catch (e, st) {
       Logger.root.warning(
-        'Native surround lookup failed for ${mediaItem.id}.$extension',
+        'Native surround lookup failed for ${mediaItem.id}.$ext',
         e,
         st,
       );
@@ -1094,6 +1178,8 @@ class AudioPlayerHandler extends BaseAudioHandler
 
     try {
       await _player.seek(position, index: index);
+      _nativeBasePosition = Duration.zero;
+      await _player.setVolume(1.0);
     } catch (e, st) {
       Logger.root.severe('Error loading tracks', e, st);
     }
