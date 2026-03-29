@@ -56,12 +56,7 @@ public class MainActivity extends AudioServiceActivity {
     SQLiteDatabase db;
     StreamServer streamServer;
 
-    // Data if started from intent
     String intentPreload;
-
-    // ----------------------------
-    // Pending service message queue
-    // ----------------------------
 
     private static class PendingServiceMessage {
         final int type;
@@ -76,10 +71,6 @@ public class MainActivity extends AudioServiceActivity {
     final ArrayList<PendingServiceMessage> pendingServiceMessages = new ArrayList<>();
     Bundle lastSettingsBundle;
 
-    // ----------------------------
-    // Native AC3 player
-    // ----------------------------
-
     private NativeAc3Player nativeAc3Player;
 
     @Override
@@ -93,7 +84,6 @@ public class MainActivity extends AudioServiceActivity {
     public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
         super.configureFlutterEngine(flutterEngine);
 
-        // Initialize ChangeIconPlugin
         ChangeIconPlugin changeIconPlugin = new ChangeIconPlugin(this);
         changeIconPlugin.initWith(flutterEngine.getDartExecutor().getBinaryMessenger());
         changeIconPlugin.tryFixLauncherIconIfNeeded();
@@ -102,13 +92,11 @@ public class MainActivity extends AudioServiceActivity {
             nativeAc3Player = new NativeAc3Player();
         }
 
-        // Flutter method channel
         new MethodChannel(
                 flutterEngine.getDartExecutor().getBinaryMessenger(),
                 CHANNEL
         ).setMethodCallHandler(((call, result) -> {
 
-            // Add downloads to DB, then refresh service
             if (call.method.equals("addDownloads")) {
                 ArrayList<HashMap<?, ?>> downloads = call.arguments();
 
@@ -125,7 +113,6 @@ public class MainActivity extends AudioServiceActivity {
 
                         if (cursor.getCount() > 0) {
                             cursor.moveToNext();
-                            // If done or error, set state to NONE
                             if (cursor.getInt(1) >= 3) {
                                 ContentValues values = new ContentValues();
                                 values.put("state", 0);
@@ -158,7 +145,6 @@ public class MainActivity extends AudioServiceActivity {
                 }
             }
 
-            // Get all downloads from DB
             if (call.method.equals("getDownloads")) {
                 Cursor cursor = db.query("Downloads", null, null, null, null, null, null);
                 ArrayList<HashMap<?, ?>> downloads = new ArrayList<>();
@@ -173,7 +159,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Update settings from UI
             if (call.method.equals("updateSettings")) {
                 Bundle bundle = new Bundle();
                 bundle.putString("json", call.argument("json").toString());
@@ -183,28 +168,24 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Load downloads from DB in service
             if (call.method.equals("loadDownloads")) {
                 sendMessageOrQueue(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
 
-            // Start/Resume downloading
             if (call.method.equals("start")) {
                 sendMessageOrQueue(DownloadService.SERVICE_START_DOWNLOAD, null);
                 result.success(serviceBound);
                 return;
             }
 
-            // Stop downloading
             if (call.method.equals("stop")) {
                 sendMessageOrQueue(DownloadService.SERVICE_STOP_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
 
-            // Remove download
             if (call.method.equals("removeDownload")) {
                 Bundle bundle = new Bundle();
                 bundle.putInt("id", (int) call.argument("id"));
@@ -213,14 +194,12 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Retry download
             if (call.method.equals("retryDownloads")) {
                 sendMessageOrQueue(DownloadService.SERVICE_RETRY_DOWNLOADS, null);
                 result.success(null);
                 return;
             }
 
-            // Remove downloads by state
             if (call.method.equals("removeDownloads")) {
                 Bundle bundle = new Bundle();
                 bundle.putInt("state", (int) call.argument("state"));
@@ -229,20 +208,17 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // If app was started with preload info (Android Auto)
             if (call.method.equals("getPreloadInfo")) {
                 result.success(intentPreload);
                 intentPreload = null;
                 return;
             }
 
-            // Get architecture
             if (call.method.equals("arch")) {
                 result.success(System.getProperty("os.arch"));
                 return;
             }
 
-            // Start streaming server
             if (call.method.equals("startServer")) {
                 if (streamServer == null) {
                     String offlinePath = getExternalFilesDir("offline").getAbsolutePath();
@@ -253,7 +229,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Get quality info from stream
             if (call.method.equals("getStreamInfo")) {
                 if (streamServer == null) {
                     result.success(null);
@@ -275,7 +250,6 @@ public class MainActivity extends AudioServiceActivity {
             // Surround helper methods
             // ----------------------------
 
-            // Returns a surround output path and makes sure parent dirs exist
             if (call.method.equals("getSurroundPath")) {
                 String trackId = call.argument("trackId");
                 Boolean persistentArg = call.argument("persistent");
@@ -294,8 +268,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Finds first existing surround file in preferred order:
-            // AC3 primary, TS fallback (when extension omitted)
             if (call.method.equals("findExistingSurroundPath")) {
                 String trackId = call.argument("trackId");
                 String extension = call.argument("extension");
@@ -305,7 +277,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Check if surround file exists
             if (call.method.equals("surroundFileExists")) {
                 String path = call.argument("path");
                 String trackId = call.argument("trackId");
@@ -322,7 +293,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Delete surround file by explicit path or by trackId
             if (call.method.equals("deleteSurroundFile")) {
                 String path = call.argument("path");
                 String trackId = call.argument("trackId");
@@ -349,7 +319,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Clear surround cache dirs
             if (call.method.equals("clearSurroundCache")) {
                 Boolean persistentArg = call.argument("persistent");
                 boolean clearPersistent = persistentArg == null || persistentArg;
@@ -460,10 +429,10 @@ public class MainActivity extends AudioServiceActivity {
                                 surroundResultToMap(processResult, ffmpegPath);
 
                         mainHandler.post(() -> result.success(out));
-                    } catch (Exception e) {
-                        Log.e("SURROUND", "generateSurroundNow failed", e);
+                    } catch (Throwable t) {
+                        Log.e("SURROUND", "generateSurroundNow failed", t);
                         final HashMap<String, Object> out = errorMap(
-                                "generateSurroundNow exception: " + e.getMessage()
+                                "generateSurroundNow throwable: " + t.getClass().getName() + ": " + t.getMessage()
                         );
                         mainHandler.post(() -> result.success(out));
                     }
@@ -537,7 +506,6 @@ public class MainActivity extends AudioServiceActivity {
                 return;
             }
 
-            // Stop services
             if (call.method.equals("kill")) {
                 Intent intent = new Intent(this, DownloadService.class);
                 stopService(intent);
@@ -553,7 +521,6 @@ public class MainActivity extends AudioServiceActivity {
             result.error("0", "Not implemented!", "Not implemented!");
         }));
 
-        // Event channel (for download updates)
         EventChannel eventChannel = new EventChannel(
                 flutterEngine.getDartExecutor().getBinaryMessenger(),
                 EVENT_CHANNEL
@@ -571,7 +538,6 @@ public class MainActivity extends AudioServiceActivity {
         }));
     }
 
-    // Start/Bind/Reconnect to download service
     private void connectService() {
         if (serviceBound) return;
 
@@ -589,11 +555,9 @@ public class MainActivity extends AudioServiceActivity {
 
         connectService();
 
-        // Get DB (and leave open!)
         DownloadsDatabase dbHelper = new DownloadsDatabase(getApplicationContext());
         db = dbHelper.getWritableDatabase();
 
-        // Trust all SSL Certs
         TrustManager[] trustAllCerts = new TrustManager[]{
                 new X509TrustManager() {
                     public java.security.cert.X509Certificate[] getAcceptedIssuers() {
@@ -648,7 +612,6 @@ public class MainActivity extends AudioServiceActivity {
         }
     }
 
-    // Connection to download service
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
@@ -666,7 +629,6 @@ public class MainActivity extends AudioServiceActivity {
         }
     };
 
-    // Handler for incoming messages from service
     private static class IncomingHandler extends Handler {
         private final WeakReference<MainActivity> weakReference;
 
@@ -724,10 +686,6 @@ public class MainActivity extends AudioServiceActivity {
             }
         }
     }
-
-    // ----------------------------
-    // Send message to service
-    // ----------------------------
 
     void sendMessage(int type, Bundle data) {
         if (serviceBound && serviceMessenger != null) {
@@ -922,7 +880,6 @@ public class MainActivity extends AudioServiceActivity {
             }
         }
 
-        // Recreate dirs for future use
         getSurroundDirectory(false, false);
         if (clearPersistent) {
             getSurroundDirectory(true, false);
@@ -957,7 +914,6 @@ public class MainActivity extends AudioServiceActivity {
 
     @Nullable
     private String resolveFfmpegBinaryPath() {
-        // FFmpegKit is bundled through AAR, no external binary path required.
         return "ffmpeg-kit";
     }
 

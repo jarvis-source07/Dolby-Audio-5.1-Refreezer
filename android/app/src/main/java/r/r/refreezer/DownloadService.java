@@ -105,16 +105,13 @@ public class DownloadService extends Service {
 
     @Override
     public void onDestroy() {
-        // Cancel notifications
         notificationManager.cancelAll();
-        // Logger
         logger.close();
         super.onDestroy();
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        // Set messengers
         serviceMessenger = new Messenger(new IncomingHandler(this));
         if (intent != null) {
             activityMessenger = intent.getParcelableExtra("activityMessenger");
@@ -125,7 +122,6 @@ public class DownloadService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Get messenger
         if (intent != null) {
             activityMessenger = intent.getParcelableExtra("activityMessenger");
         }
@@ -133,7 +129,6 @@ public class DownloadService extends Service {
         return START_STICKY;
     }
 
-    // Android O+ Notifications
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
@@ -146,11 +141,9 @@ public class DownloadService extends Service {
         }
     }
 
-    // Update download tasks
     private void updateQueue() {
         db.beginTransaction();
 
-        // Clear downloaded tracks
         for (int i = threads.size() - 1; i >= 0; i--) {
             Download.DownloadState state = threads.get(i).download.state;
             if (state == Download.DownloadState.NONE ||
@@ -160,7 +153,6 @@ public class DownloadService extends Service {
 
                 Download d = threads.get(i).download;
 
-                // Update in queue
                 for (int j = 0; j < downloads.size(); j++) {
                     if (downloads.get(j).id == d.id) {
                         downloads.set(j, d);
@@ -169,19 +161,16 @@ public class DownloadService extends Service {
 
                 updateProgress();
 
-                // Save to DB
                 ContentValues row = new ContentValues();
                 row.put("state", state.getValue());
                 row.put("quality", d.quality);
                 db.update("Downloads", row, "id == ?", new String[]{Integer.toString(d.id)});
 
-                // Update library
                 if (state == Download.DownloadState.DONE && !d.priv) {
                     Uri uri = Uri.fromFile(new File(threads.get(i).outFile.getPath()));
                     sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri));
                 }
 
-                // Remove thread
                 threads.remove(i);
             }
         }
@@ -189,7 +178,6 @@ public class DownloadService extends Service {
         db.setTransactionSuccessful();
         db.endTransaction();
 
-        // Create new download tasks
         if (running) {
             int nThreads = settings != null ? settings.downloadThreads - threads.size() : 0;
             for (int i = 0; i < nThreads; i++) {
@@ -212,12 +200,10 @@ public class DownloadService extends Service {
             }
         }
 
-        // Send updates to UI
         updateProgress();
         updateState();
     }
 
-    // Send state change to UI
     private void updateState() {
         Bundle b = new Bundle();
         b.putBoolean("running", running);
@@ -233,7 +219,6 @@ public class DownloadService extends Service {
         sendMessage(SERVICE_ON_STATE_CHANGE, b);
     }
 
-    // Wrapper to prevent threads racing
     private void updateQueueWrapper() {
         updateRequests.add(true);
         if (!updating) {
@@ -248,7 +233,6 @@ public class DownloadService extends Service {
         updating = false;
     }
 
-    // Loads downloads from database
     private void loadDownloads() {
         Cursor cursor = db.query("Downloads", null, null, null, null, null, null);
 
@@ -278,7 +262,6 @@ public class DownloadService extends Service {
         updateState();
     }
 
-    // Stop downloads
     private void stop() {
         running = false;
         for (int i = 0; i < threads.size(); i++) {
@@ -304,10 +287,8 @@ public class DownloadService extends Service {
 
         @Override
         public void run() {
-            // Set state
             download.state = Download.DownloadState.DOWNLOADING;
 
-            // Authorize deezer api
             if (!deezer.authorized && !deezer.authorizing) {
                 deezer.authorize();
             }
@@ -319,7 +300,6 @@ public class DownloadService extends Service {
                 }
             }
 
-            // Don't fetch meta if user uploaded mp3
             if (!download.isUserUploaded()) {
                 try {
                     trackJson = deezer.callPublicAPI("track", download.trackId);
@@ -336,7 +316,6 @@ public class DownloadService extends Service {
                 }
             }
 
-            // Fallback
             Deezer.QualityInfo qualityInfo = new Deezer.QualityInfo(
                     this.download.quality,
                     this.download.streamTrackId,
@@ -362,12 +341,10 @@ public class DownloadService extends Service {
                     return;
                 }
             } else {
-                // User uploaded MP3
                 qualityInfo.quality = 3;
             }
 
             if (!download.priv) {
-                // Check file
                 try {
                     if (download.isUserUploaded()) {
                         outFile = new File(
@@ -387,12 +364,10 @@ public class DownloadService extends Service {
                     return;
                 }
             } else {
-                // Private track
                 outFile = new File(download.path);
                 parentDir = new File(outFile.getParent());
             }
 
-            // File already exists
             if (outFile.exists()) {
                 if (settings != null && settings.overwriteDownload) {
                     outFile.delete();
@@ -403,16 +378,13 @@ public class DownloadService extends Service {
                 }
             }
 
-            // Temp encrypted file
             File tmpFile = new File(getCacheDir(), download.id + ".ENC");
 
-            // Get start bytes offset
             long start = 0;
             if (tmpFile.exists()) {
                 start = tmpFile.length();
             }
 
-            // Download
             try {
                 URL url = new URL(sURL);
                 HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
@@ -469,9 +441,6 @@ public class DownloadService extends Service {
                 return;
             }
 
-            // Post processing
-
-            // Decrypt
             if (qualityInfo.encrypted) {
                 try {
                     File decFile = new File(tmpFile.getPath() + ".DEC");
@@ -485,14 +454,12 @@ public class DownloadService extends Service {
                 }
             }
 
-            // If exists (duplicate download in DB), don't overwrite
             if (outFile.exists()) {
                 download.state = Download.DownloadState.DONE;
                 exit();
                 return;
             }
 
-            // Create dirs and copy
             if (!parentDir.exists() && !parentDir.mkdirs()) {
                 logger.error("Couldn't create output folder: " + parentDir.getPath() + "! ", download);
                 download.state = Download.DownloadState.ERROR;
@@ -526,7 +493,6 @@ public class DownloadService extends Service {
                 }
             }
 
-            // Cover & Tags, ignore on user uploaded
             if (!download.priv && !download.isUserUploaded()) {
 
                 File coverFile = new File(
@@ -551,7 +517,7 @@ public class DownloadService extends Service {
                     OutputStream outputStream = new FileOutputStream(coverFile.getPath());
 
                     byte[] buffer = new byte[4096];
-                    int read = 0;
+                    int read;
                     while ((read = inputStream.read(buffer)) != -1) {
                         outputStream.write(buffer, 0, read);
                     }
@@ -568,7 +534,6 @@ public class DownloadService extends Service {
                     e.printStackTrace();
                 }
 
-                // Lyrics
                 if (settings.downloadLyrics || settings.tags.lyrics) {
                     try {
                         lyricsData = deezer.getlyricsNew(download.trackId);
@@ -617,7 +582,6 @@ public class DownloadService extends Service {
                     }
                 }
 
-                // Tag
                 try {
                     deezer.tagTrack(
                             outFile.getPath(),
@@ -633,35 +597,34 @@ public class DownloadService extends Service {
                     e.printStackTrace();
                 }
 
-                // Delete cover if disabled
                 if (!settings.trackCover) {
                     coverFile.delete();
                 }
 
-                // Album cover
                 if (settings.albumCover) {
                     downloadAlbumCover(albumJson);
                 }
             }
 
-            // Generate surround AC3 artifact after the original file is ready.
-            // This is cache-generation and should never fail the original download.
-            maybeGenerateSurroundArtifact(download, outFile);
-
-            download.state = Download.DownloadState.DONE;
-
-            updateQueueWrapper();
-            stopSelf();
+            // Never let surround generation block or crash the original download completion.
+            try {
+                maybeGenerateSurroundArtifact(download, outFile);
+            } catch (Throwable t) {
+                logger.warn("Surround generation throwable: " + t, download);
+                Log.e("SURROUND", "Surround generation throwable", t);
+            } finally {
+                download.state = Download.DownloadState.DONE;
+                updateQueueWrapper();
+                stopSelf();
+            }
         }
 
-        // Each track has own album art, this is to download cover.jpg
         void downloadAlbumCover(JSONObject albumJson) {
             if (albumJson == null || !albumJson.has("md5_image")) return;
 
             File coverFile = new File(parentDir, "cover.jpg");
             if (coverFile.exists()) return;
 
-            // Don't download if doesn't have album
             if (!download.path.matches(".*/.*%album%.*/.*")) return;
 
             try {
@@ -684,7 +647,7 @@ public class DownloadService extends Service {
                 OutputStream outputStream = new FileOutputStream(coverFile.getPath());
 
                 byte[] buffer = new byte[4096];
-                int read = 0;
+                int read;
                 while ((read = inputStream.read(buffer)) != -1) {
                     outputStream.write(buffer, 0, read);
                 }
@@ -696,7 +659,6 @@ public class DownloadService extends Service {
                 } catch (Exception ignored) {
                 }
 
-                // Create .nomedia
                 if (settings.nomediaFiles) {
                     new File(parentDir, ".nomedia").createNewFile();
                 }
@@ -710,7 +672,6 @@ public class DownloadService extends Service {
             stopDownload = true;
         }
 
-        // Clean stop/exit
         private void exit() {
             updateQueueWrapper();
             stopSelf();
@@ -769,7 +730,6 @@ public class DownloadService extends Service {
                             + ", playbackMode=" + settings.playbackMode
             );
 
-            // Delete old AC3/TS artifacts for this track before regenerating.
             deleteSurroundArtifacts(download.trackId);
 
             FFmpegSurroundProcessor processor = new FFmpegSurroundProcessor(ffmpegPath);
@@ -815,22 +775,17 @@ public class DownloadService extends Service {
                         download
                 );
             }
-        } catch (Exception e) {
-            logger.warn("Unexpected surround generation error: " + e, download);
-            Log.e("SURROUND", "Unexpected surround generation error", e);
+        } catch (Throwable t) {
+            logger.warn("Unexpected surround generation throwable: " + t, download);
+            Log.e("SURROUND", "Unexpected surround generation throwable", t);
         }
     }
 
-    /**
-     * Resolve ffmpeg executable path.
-     * FFmpegKit is bundled through the local AAR, so no external binary path is required.
-     */
     @Nullable
     private String resolveFfmpegBinaryPath() {
         return "ffmpeg-kit";
     }
 
-    // 500ms loop to update notifications and UI
     private void createProgressUpdateHandler() {
         progressUpdateHandler.postDelayed(() -> {
             updateProgress();
@@ -838,7 +793,6 @@ public class DownloadService extends Service {
         }, 500);
     }
 
-    // Updates notification and UI
     private void updateProgress() {
         if (threads.size() > 0) {
             Bundle b = new Bundle();
@@ -855,7 +809,6 @@ public class DownloadService extends Service {
         }
     }
 
-    // Create bundle with download progress & state
     private Bundle createProgressBundle(Download download) {
         Bundle bundle = new Bundle();
         bundle.putInt("id", download.id);
@@ -867,7 +820,6 @@ public class DownloadService extends Service {
     }
 
     private void updateNotification(Download download) {
-        // Cancel notification for done/none/error downloads
         if (download.state == Download.DownloadState.NONE || download.state.getValue() >= 3) {
             notificationManager.cancel(NOTIFICATION_ID_START + download.id);
             return;
@@ -879,7 +831,6 @@ public class DownloadService extends Service {
                         .setSmallIcon(R.drawable.ic_logo)
                         .setPriority(NotificationCompat.PRIORITY_MIN);
 
-        // Show progress when downloading
         if (download.state == Download.DownloadState.DOWNLOADING) {
             if (download.filesize <= 0) download.filesize = 1;
             notificationBuilder.setContentText(
@@ -896,7 +847,6 @@ public class DownloadService extends Service {
             );
         }
 
-        // Indeterminate on PostProcess
         if (download.state == Download.DownloadState.POST) {
             notificationBuilder.setContentText("Post processing...");
             notificationBuilder.setProgress(1, 1, true);
@@ -913,7 +863,6 @@ public class DownloadService extends Service {
         }
     }
 
-    // https://stackoverflow.com/questions/3263892/format-file-size-as-mb-gb-etc
     public static String formatFilesize(long size) {
         if (size <= 0) return "0B";
         final String[] units = new String[]{"B", "KB", "MB", "GB", "TB"};
@@ -923,7 +872,6 @@ public class DownloadService extends Service {
         ) + " " + units[digitGroups];
     }
 
-    // Handler for incoming messages
     class IncomingHandler extends Handler {
         IncomingHandler(Context context) {
             context.getApplicationContext();
@@ -932,12 +880,10 @@ public class DownloadService extends Service {
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {
-                // Load downloads from DB
                 case SERVICE_LOAD_DOWNLOADS:
                     loadDownloads();
                     break;
 
-                // Start/Resume
                 case SERVICE_START_DOWNLOAD:
                     running = true;
                     if (downloads.isEmpty()) {
@@ -947,7 +893,6 @@ public class DownloadService extends Service {
                     updateState();
                     break;
 
-                // Load settings
                 case SERVICE_SETTINGS_UPDATE:
                     settings = DownloadSettings.fromBundle(msg.getData());
                     if (settings != null) {
@@ -963,12 +908,10 @@ public class DownloadService extends Service {
                     }
                     break;
 
-                // Stop downloads
                 case SERVICE_STOP_DOWNLOADS:
                     stop();
                     break;
 
-                // Remove download
                 case SERVICE_REMOVE_DOWNLOAD:
                     int downloadId = msg.getData().getInt("id");
                     for (int i = 0; i < downloads.size(); i++) {
@@ -986,7 +929,6 @@ public class DownloadService extends Service {
                     updateState();
                     break;
 
-                // Retry failed downloads
                 case SERVICE_RETRY_DOWNLOADS:
                     db.beginTransaction();
                     for (int i = 0; i < downloads.size(); i++) {
@@ -1011,12 +953,10 @@ public class DownloadService extends Service {
                     updateState();
                     break;
 
-                // Remove downloads by state
                 case SERVICE_REMOVE_DOWNLOADS:
                     Download.DownloadState state =
                             Download.DownloadState.values()[msg.getData().getInt("state")];
 
-                    // Don't remove currently downloading
                     if (state == Download.DownloadState.DOWNLOADING ||
                             state == Download.DownloadState.POST) {
                         return;
@@ -1054,7 +994,6 @@ public class DownloadService extends Service {
         }
     }
 
-    // Send message to MainActivity
     void sendMessage(int type, Bundle data) {
         if (activityMessenger != null) {
             Message msg = Message.obtain(null, type);
@@ -1172,7 +1111,6 @@ public class DownloadService extends Service {
         String deezerCountry = "US";
         SelectedTags tags;
 
-        // Surround-related settings
         String playbackMode = "normal";
         String surroundPreset = "balanced";
 
@@ -1212,7 +1150,6 @@ public class DownloadService extends Service {
             return "surround".equalsIgnoreCase(playbackMode);
         }
 
-        // Parse settings from bundle sent from UI
         static DownloadSettings fromBundle(Bundle b) {
             JSONObject json;
             try {

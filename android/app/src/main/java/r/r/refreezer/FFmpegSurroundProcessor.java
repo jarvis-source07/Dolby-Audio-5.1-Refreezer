@@ -50,72 +50,86 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
      * Main FFmpegKit-backed processing entrypoint.
      */
     public Result processWithFfmpeg(Config config) {
-        if (config == null) {
-            return Result.failure(
-                    null,
-                    null,
-                    null,
-                    "AC3",
-                    "ac3",
-                    "balanced",
-                    0,
-                    0,
-                    "Config is null"
-            );
-        }
+        try {
+            if (config == null) {
+                return Result.failure(
+                        null,
+                        null,
+                        null,
+                        "AC3",
+                        "ac3",
+                        "balanced",
+                        0,
+                        0,
+                        "Config is null"
+                );
+            }
 
-        if (!isAvailable()) {
-            return Result.failure(
-                    config.trackId,
-                    config.inputPath,
-                    config.outputPath,
-                    "AC3",
-                    containerLabel(config.outputMode),
-                    config.preset.value(),
-                    0,
-                    0,
-                    "FFmpegKit not available"
-            );
-        }
+            if (!isAvailable()) {
+                return Result.failure(
+                        config.trackId,
+                        config.inputPath,
+                        config.outputPath,
+                        "AC3",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        0,
+                        0,
+                        "FFmpegKit not available"
+                );
+            }
 
-        final boolean remoteInput = isRemoteInput(config.inputPath);
-        File inputFile = new File(config.inputPath == null ? "" : config.inputPath);
+            final boolean remoteInput = isRemoteInput(config.inputPath);
+            File inputFile = new File(config.inputPath == null ? "" : config.inputPath);
 
-        if (!remoteInput && (!inputFile.exists() || !inputFile.isFile())) {
-            return Result.failure(
-                    config.trackId,
-                    config.inputPath,
-                    config.outputPath,
-                    "AC3",
-                    containerLabel(config.outputMode),
-                    config.preset.value(),
-                    0,
-                    0,
-                    "Input file not found"
-            );
-        }
+            if (!remoteInput && (!inputFile.exists() || !inputFile.isFile())) {
+                return Result.failure(
+                        config.trackId,
+                        config.inputPath,
+                        config.outputPath,
+                        "AC3",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        0,
+                        0,
+                        "Input file not found"
+                );
+            }
 
-        File finalOutputFile = new File(config.outputPath == null ? "" : config.outputPath);
-        if (!ensureParentDirectory(finalOutputFile)) {
-            return Result.failure(
-                    config.trackId,
-                    config.inputPath,
-                    config.outputPath,
-                    "AC3",
-                    containerLabel(config.outputMode),
-                    config.preset.value(),
-                    remoteInput ? 0 : safeLength(inputFile),
-                    0,
-                    "Failed to create output directory"
-            );
-        }
+            File finalOutputFile = new File(config.outputPath == null ? "" : config.outputPath);
+            if (!ensureParentDirectory(finalOutputFile)) {
+                return Result.failure(
+                        config.trackId,
+                        config.inputPath,
+                        config.outputPath,
+                        "AC3",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        remoteInput ? 0 : safeLength(inputFile),
+                        0,
+                        "Failed to create output directory"
+                );
+            }
 
-        // Overwrite handling
-        if (finalOutputFile.exists()) {
-            if (config.overwrite) {
-                boolean deleted = finalOutputFile.delete();
-                if (!deleted) {
-                    return Result.failure(
+            // Overwrite handling
+            if (finalOutputFile.exists()) {
+                if (config.overwrite) {
+                    boolean deleted = finalOutputFile.delete();
+                    if (!deleted) {
+                        return Result.failure(
+                                config.trackId,
+                                config.inputPath,
+                                config.outputPath,
+                                "AC3",
+                                containerLabel(config.outputMode),
+                                config.preset.value(),
+                                remoteInput ? 0 : safeLength(inputFile),
+                                safeLength(finalOutputFile),
+                                "Failed to overwrite existing output file"
+                        );
+                    }
+                } else {
+                    return Result.success(
                             config.trackId,
                             config.inputPath,
                             config.outputPath,
@@ -124,67 +138,68 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                             config.preset.value(),
                             remoteInput ? 0 : safeLength(inputFile),
                             safeLength(finalOutputFile),
-                            "Failed to overwrite existing output file"
+                            "Output already exists"
                     );
                 }
-            } else {
-                return Result.success(
-                        config.trackId,
-                        config.inputPath,
-                        config.outputPath,
-                        "AC3",
-                        containerLabel(config.outputMode),
-                        config.preset.value(),
-                        remoteInput ? 0 : safeLength(inputFile),
-                        safeLength(finalOutputFile),
-                        "Output already exists"
-                );
             }
-        }
 
-        // Optional plumbing-only validation path
-        if (config.debugPassthrough) {
-            return super.process(config);
-        }
+            // Optional plumbing-only validation path
+            if (config.debugPassthrough) {
+                return super.process(config);
+            }
 
-        // Create AC3 master path
-        File ac3MasterFile;
-        boolean deleteAc3AfterMux = false;
+            // Create AC3 master path
+            File ac3MasterFile;
+            boolean deleteAc3AfterMux = false;
 
-        if (config.outputMode == OutputMode.AC3) {
-            ac3MasterFile = finalOutputFile;
-        } else {
-            String ac3Path = buildOutputPath(
-                    config.inputPath,
-                    buildPresetSuffix(config.preset) + "_master",
-                    OutputMode.AC3
-            );
-            ac3MasterFile = new File(ac3Path);
-            deleteAc3AfterMux = true;
+            if (config.outputMode == OutputMode.AC3) {
+                ac3MasterFile = finalOutputFile;
+            } else {
+                String ac3Path = buildOutputPath(
+                        config.inputPath,
+                        buildPresetSuffix(config.preset) + "_master",
+                        OutputMode.AC3
+                );
+                ac3MasterFile = new File(ac3Path);
+                deleteAc3AfterMux = true;
 
-            if (ac3MasterFile.exists()) {
+                if (ac3MasterFile.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    ac3MasterFile.delete();
+                }
+            }
+
+            Result ac3Result = renderToAc3Master(config, inputFile, ac3MasterFile);
+            if (!ac3Result.success) {
+                return ac3Result;
+            }
+
+            if (config.outputMode == OutputMode.AC3) {
+                return ac3Result;
+            }
+
+            Result tsResult = muxAc3ToTs(config, ac3MasterFile, finalOutputFile);
+
+            if (deleteAc3AfterMux && ac3MasterFile.exists()) {
                 //noinspection ResultOfMethodCallIgnored
                 ac3MasterFile.delete();
             }
+
+            return tsResult;
+        } catch (Throwable t) {
+            Log.e(TAG, "processWithFfmpeg crashed", t);
+            return Result.failure(
+                    config != null ? config.trackId : null,
+                    config != null ? config.inputPath : null,
+                    config != null ? config.outputPath : null,
+                    "AC3",
+                    config != null ? containerLabel(config.outputMode) : "ac3",
+                    config != null ? config.preset.value() : "balanced",
+                    0,
+                    0,
+                    "FFmpegKit throwable: " + t.getClass().getName() + ": " + t.getMessage()
+            );
         }
-
-        Result ac3Result = renderToAc3Master(config, inputFile, ac3MasterFile);
-        if (!ac3Result.success) {
-            return ac3Result;
-        }
-
-        if (config.outputMode == OutputMode.AC3) {
-            return ac3Result;
-        }
-
-        Result tsResult = muxAc3ToTs(config, ac3MasterFile, finalOutputFile);
-
-        if (deleteAc3AfterMux && ac3MasterFile.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            ac3MasterFile.delete();
-        }
-
-        return tsResult;
     }
 
     /**
@@ -238,8 +253,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     "AC3 master generated"
             );
 
-        } catch (Exception e) {
-            Log.e(TAG, "renderToAc3Master failed", e);
+        } catch (Throwable t) {
+            Log.e(TAG, "renderToAc3Master failed", t);
             return Result.failure(
                     config.trackId,
                     config.inputPath,
@@ -249,7 +264,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     config.preset.value(),
                     isRemoteInput(config.inputPath) ? 0 : safeLength(inputFile),
                     safeLength(ac3OutputFile),
-                    "AC3 render exception: " + e.getMessage()
+                    "AC3 render throwable: " + t.getClass().getName() + ": " + t.getMessage()
             );
         }
     }
@@ -318,8 +333,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     "TS output generated"
             );
 
-        } catch (Exception e) {
-            Log.e(TAG, "muxAc3ToTs failed", e);
+        } catch (Throwable t) {
+            Log.e(TAG, "muxAc3ToTs failed", t);
             return Result.failure(
                     config.trackId,
                     ac3InputFile.getAbsolutePath(),
@@ -329,7 +344,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     config.preset.value(),
                     safeLength(ac3InputFile),
                     safeLength(tsOutputFile),
-                    "TS mux exception: " + e.getMessage()
+                    "TS mux throwable: " + t.getClass().getName() + ": " + t.getMessage()
             );
         }
     }
@@ -444,24 +459,32 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         String commandString = joinCommand(command);
         Log.d(TAG, "Running FFmpegKit command: " + commandString);
 
-        FFmpegSession session = FFmpegKit.execute(commandString);
-        ReturnCode returnCode = session.getReturnCode();
-
-        int exitCode = -1;
-        if (returnCode != null) {
-            exitCode = returnCode.getValue();
-        }
-
-        String output = "";
         try {
-            // Keep compile/runtime-safe across FFmpegKit variants.
-            output = "";
-        } catch (Exception ignored) {
+            FFmpegSession session = FFmpegKit.execute(commandString);
+            ReturnCode returnCode = session.getReturnCode();
+
+            int exitCode = -1;
+            if (returnCode != null) {
+                exitCode = returnCode.getValue();
+            }
+
+            String output = "";
+            try {
+                output = "";
+            } catch (Throwable ignored) {
+            }
+
+            Log.d(TAG, "FFmpegKit exitCode=" + exitCode);
+
+            return new ProcessRunResult(exitCode, output, output);
+        } catch (Throwable t) {
+            Log.e(TAG, "FFmpegKit execution crashed", t);
+            return new ProcessRunResult(
+                    -999,
+                    "",
+                    "FFmpegKit throwable: " + t.getClass().getName() + ": " + t.getMessage()
+            );
         }
-
-        Log.d(TAG, "FFmpegKit exitCode=" + exitCode);
-
-        return new ProcessRunResult(exitCode, output, output);
     }
 
     /**
@@ -491,7 +514,10 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                 arg.contains("{") ||
                 arg.contains("}") ||
                 arg.contains(";") ||
-                arg.contains(",");
+                arg.contains(",") ||
+                arg.contains("&") ||
+                arg.contains("?") ||
+                arg.contains("=");
 
         String escaped = arg.replace("\"", "\\\"");
 
@@ -508,7 +534,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         }
         input = input.trim();
         if (input.length() <= 1000) return input;
-        return input.substring(input.length() - 1000);
+        return input.substring(Math.max(0, input.length() - 1000));
     }
 
     protected boolean ensureParentDirectory(File outputFile) {
