@@ -42,7 +42,6 @@ import r.r.refreezer.models.SynchronizedLyric;
 public class Deezer {
 
     static String USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36";
-
     DownloadLog logger;
     String token;
     String arl;
@@ -54,16 +53,19 @@ public class Deezer {
 
     Deezer() {}
 
-    // Initialize for logging
+    //Initialize for logging
     void init(DownloadLog logger, String arl) {
+        //Load native
+        //System.loadLibrary("decryptor-jni");
+
         this.logger = logger;
         this.arl = arl;
     }
 
     // Method for when using c libraries for decryption
-    // public native void decryptFile(String trackId, String inputFilename, String outputFilename);
+    //public native void decryptFile(String trackId, String inputFilename, String outputFilename);
 
-    // Authorize GWLight API
+    //Authorize GWLight API
     public void authorize() {
         if (!authorized || sid == null || token == null) {
             authorizing = true;
@@ -72,16 +74,13 @@ public class Deezer {
                 authorized = true;
             } catch (Exception e) {
                 logger.warn("Error authorizing to Deezer API! " + e);
-            } finally {
-                authorizing = false;
             }
-        } else {
-            authorizing = false;
         }
+        authorizing = false;
     }
 
-    // Make POST request
-    private String POST(String _url, String data, Map<String, String> additionalHeaders) {
+    //Make POST request
+    private String POST(String _url, String data,  Map<String, String> additionalHeaders) {
         String result = null;
 
         try {
@@ -102,14 +101,14 @@ public class Deezer {
                 }
             }
 
-            // Write body
+            //Write body
             if (data != null) {
                 try (DataOutputStream wr = new DataOutputStream(connection.getOutputStream())) {
                     wr.writeBytes(data);
                 }
             }
 
-            // Get response
+            //Get response
             try (Scanner scanner = new Scanner(connection.getInputStream())) {
                 StringBuilder output = new StringBuilder();
                 while (scanner.hasNext()) {
@@ -126,7 +125,7 @@ public class Deezer {
     }
 
     public JSONObject callGWAPI(String method, String body) throws Exception {
-        // Get token
+        //Get token
         if (token == null) {
             token = "null";
             callGWAPI("deezer.getUserData", "{}");
@@ -142,10 +141,10 @@ public class Deezer {
                 cookies
         );
 
-        // Parse JSON
+        //Parse JSON
         JSONObject out = new JSONObject(data);
 
-        // Save token
+        //Save token
         if ((token == null || token.equals("null")) && method.equals("deezer.getUserData")) {
             token = out.getJSONObject("results").getString("checkForm");
             sid = out.getJSONObject("results").getString("SESSION_ID");
@@ -163,15 +162,16 @@ public class Deezer {
         return out;
     }
 
-    // api.deezer.com/$method/$param
+    //api.deezer.com/$method/$param
     public JSONObject callPublicAPI(String method, String param) throws Exception {
         URL url = new URL("https://api.deezer.com/" + method + "/" + param);
-        HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+        HttpsURLConnection connection = (HttpsURLConnection)url.openConnection();
         connection.setRequestMethod("GET");
         connection.setRequestProperty("Accept-Language", contentLanguage + ",*");
         connection.setConnectTimeout(20000);
         connection.connect();
 
+        //Get string data
         StringBuilder data = new StringBuilder();
         InputStream inputStream = connection.getInputStream();
         try (Scanner scanner = new Scanner(new InputStreamReader(inputStream))) {
@@ -182,6 +182,7 @@ public class Deezer {
             connection.disconnect();
         }
 
+        //Parse JSON & return
         return new JSONObject(data.toString());
     }
 
@@ -208,22 +209,25 @@ public class Deezer {
         }
 
         String response = POST("https://pipe.deezer.com/api/", paramsJsonString, headers);
+        // Return response as JSONObject
         return new JSONObject(response);
     }
 
     // Method to get JSON Web Token
-    public String getJsonWebToken() throws Exception {
+    public String getJsonWebToken() throws Exception{
         String urlString = "https://auth.deezer.com/login/arl?jo=p&rto=c&i=c";
         Map<String, String> cookies = new HashMap<>();
         cookies.put("Cookie", "arl=" + arl + (sid == null ? "" : "; sid=" + sid));
         String response = POST(urlString, "", cookies);
 
+        // Parse JSON and return JWT
         JSONObject body = new JSONObject(response);
         return body.has("jwt") ? body.getString("jwt") : "";
     }
 
     public Lyrics getlyricsNew(String trackId) {
         try {
+            // Create the GraphQL query string
             String queryStringGraphQL =
                     "query SynchronizedTrackLyrics($trackId: String!) {" +
                             "  track(trackId: $trackId) {" +
@@ -244,6 +248,7 @@ public class Deezer {
                             "  }" +
                             "}";
 
+            // Create the request parameters
             Map<String, Object> requestParams = new HashMap<>();
             requestParams.put("operationName", "SynchronizedTrackLyrics");
             Map<String, String> variables = new HashMap<>();
@@ -251,8 +256,10 @@ public class Deezer {
             requestParams.put("variables", variables);
             requestParams.put("query", queryStringGraphQL);
 
+            // Call the API
             JSONObject data = callPipeApi(requestParams);
 
+            // Parse the response into a LyricsFull object
             return new LyricsNew(data);
 
         } catch (Exception e) {
@@ -263,53 +270,7 @@ public class Deezer {
         }
     }
 
-    // ----------------------------
-    // Useful helpers for future processing
-    // ----------------------------
-
-    public static boolean isLosslessQuality(int quality) {
-        return quality == 9;
-    }
-
-    public static String extensionForQuality(int quality) {
-        return isLosslessQuality(quality) ? ".flac" : ".mp3";
-    }
-
-    public static String formatLabelForQuality(int quality) {
-        switch (quality) {
-            case 9:
-                return "FLAC";
-            case 3:
-                return "MP3_320";
-            case 1:
-                return "MP3_128";
-            default:
-                return "UNKNOWN";
-        }
-    }
-
-    public static String stripExtension(String path) {
-        if (path == null || path.isEmpty()) return path;
-        int dotIndex = path.lastIndexOf('.');
-        if (dotIndex <= 0) return path;
-        return path.substring(0, dotIndex);
-    }
-
-    public static String buildDerivedOutputPath(String originalPath, String suffix, String extension) {
-        String base = stripExtension(originalPath);
-        if (base == null) return originalPath;
-
-        String safeSuffix = (suffix == null || suffix.trim().isEmpty()) ? "derived" : sanitize(suffix.trim());
-        String safeExtension = (extension == null || extension.trim().isEmpty()) ? "ts" : extension.trim();
-
-        if (!safeExtension.startsWith(".")) {
-            safeExtension = "." + safeExtension;
-        }
-
-        return base + "_" + safeSuffix + safeExtension;
-    }
-
-    // Generate track download URL
+    //Generate track download URL
     public String generateTrackUrl(String trackId, String md5origin, String mediaVersion, int quality) {
         try {
             int magic = 164;
@@ -322,37 +283,33 @@ public class Deezer {
             step1.write(trackId.getBytes());
             step1.write(magic);
             step1.write(mediaVersion.getBytes());
-
-            // Get MD5
+            //Get MD5
             MessageDigest md5 = MessageDigest.getInstance("MD5");
             md5.update(step1.toByteArray());
             byte[] digest = md5.digest();
             String md5hex = DeezerDecryptor.bytesToHex(digest).toLowerCase();
 
-            // Step 2
+            //Step 2
             ByteArrayOutputStream step2 = new ByteArrayOutputStream();
             step2.write(md5hex.getBytes());
             step2.write(magic);
             step2.write(step1.toByteArray());
             step2.write(magic);
 
-            // Pad step2 with dots, to get correct length
-            while (step2.size() % 16 > 0) {
-                step2.write(46);
-            }
+            //Pad step2 with dots, to get correct length
+            while(step2.size()%16 > 0) step2.write(46);
 
-            // Prepare AES encryption
+            //Prepare AES encryption
             Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding");
             SecretKeySpec key = new SecretKeySpec("jo6aey6haid2Teih".getBytes(), "AES");
             cipher.init(Cipher.ENCRYPT_MODE, key);
-
-            // Encrypt
+            //Encrypt
             StringBuilder step3 = new StringBuilder();
-            for (int i = 0; i < step2.size() / 16; i++) {
-                byte[] b = Arrays.copyOfRange(step2.toByteArray(), i * 16, (i + 1) * 16);
+            for (int i=0; i<step2.size()/16; i++) {
+                byte[] b = Arrays.copyOfRange(step2.toByteArray(), i*16, (i+1)*16);
                 step3.append(DeezerDecryptor.bytesToHex(cipher.doFinal(b)).toLowerCase());
             }
-
+            //Return joined to URL
             return "https://e-cdns-proxy-" + md5origin.charAt(0) + ".dzcdn.net/mobile/1/" + step3;
 
         } catch (Exception e) {
@@ -363,14 +320,8 @@ public class Deezer {
     }
 
     // Returns URL and whether encrypted
-    public Pair<String, Boolean> getTrackUrl(
-            String trackId,
-            String trackToken,
-            String md5origin,
-            String mediaVersion,
-            int quality,
-            int refreshAttempt
-    ) {
+    public Pair<String, Boolean> getTrackUrl(String trackId, String trackToken, String md5origin, String mediaVersion,
+            int quality, int refreshAttempt) {
         // Legit url gen
         if (this.licenseToken != null && (quality > 0)) {
             String url = null;
@@ -383,65 +334,43 @@ public class Deezer {
             }
 
             try {
-                // arl cookie
+                //arl cookie
                 Map<String, String> cookies = new HashMap<>();
                 cookies.put("Cookie", "arl=" + arl);
-
                 // Create track_url payload
                 String payload = "{\n" +
                         "\"license_token\": \"" + licenseToken + "\",\n" +
                         "\"media\": [{ \"type\": \"FULL\", \"formats\": [{ \"cipher\": \"BF_CBC_STRIPE\", \"format\": \"" + format + "\"}]}],\n" +
                         "\"track_tokens\": [\"" + trackToken + "\"]\n" +
                         "}";
-
                 String output = POST("https://media.deezer.com/v1/get_url", payload, cookies);
 
                 JSONObject result = new JSONObject(output);
 
-                if (result.has("data")) {
-                    for (int i = 0; i < result.getJSONArray("data").length(); i++) {
+                if (result.has("data")){
+                    for (int i = 0; i < result.getJSONArray("data").length(); i++){
                         JSONObject data = result.getJSONArray("data").getJSONObject(i);
-
-                        if (data.has("errors")) {
+                        if (data.has("errors")){
                             JSONArray errors = data.getJSONArray("errors");
                             for (int j = 0; j < errors.length(); j++) {
                                 JSONObject error = errors.getJSONObject(j);
                                 if (error.getInt("code") == 2001 && refreshAttempt < 1) {
                                     // Track token is expired, attempt 1 track data refresh
-                                    JSONObject privateJson = callGWAPI(
-                                            "song.getListData",
-                                            "{\"sng_ids\": [" + trackId + "]}"
-                                    );
-                                    JSONObject trackData = privateJson
-                                            .getJSONObject("results")
-                                            .getJSONArray("data")
-                                            .getJSONObject(0);
-
+                                    JSONObject privateJson = callGWAPI("song.getListData", "{\"sng_ids\": [" + trackId + "]}");
+                                    JSONObject trackData = privateJson.getJSONObject("results").getJSONArray("data").getJSONObject(0);
                                     trackId = trackData.getString("SNG_ID");
                                     trackToken = trackData.getString("TRACK_TOKEN");
                                     md5origin = trackData.getString("MD5_ORIGIN");
                                     mediaVersion = trackData.getString("MEDIA_VERSION");
 
-                                    // Retry getTrackUrl with refreshed track data
-                                    return getTrackUrl(
-                                            trackId,
-                                            trackToken,
-                                            md5origin,
-                                            mediaVersion,
-                                            quality,
-                                            refreshAttempt + 1
-                                    );
+                                    // Retry getTrackUrl with refreshed track data and increment retry count
+                                    return getTrackUrl(trackId, trackToken, md5origin, mediaVersion, quality, refreshAttempt + 1);
                                 }
                             }
                             logger.warn("Failed in getting streaming URL: " + data.get("errors"));
                         }
-
-                        if (data.has("media") && data.getJSONArray("media").length() > 0) {
-                            url = data.getJSONArray("media")
-                                    .getJSONObject(0)
-                                    .getJSONArray("sources")
-                                    .getJSONObject(0)
-                                    .getString("url");
+                        if (data.has("media") && data.getJSONArray("media").length() > 0){
+                            url = data.getJSONArray("media").getJSONObject(0).getJSONArray("sources").getJSONObject(0).getString("url");
                             break;
                         }
                     }
@@ -450,88 +379,58 @@ public class Deezer {
                 e.printStackTrace();
                 logger.warn("Error getting streaming URL: " + e);
             }
-
-            return new Pair<>(url, true);
+            return new Pair<String, Boolean>(url,true);
         }
-
-        // Deprecated Legacy url generation
-        return new Pair<>(generateTrackUrl(trackId, md5origin, mediaVersion, quality), true);
+        // Deprecated Legacy url generation. Seems unavailable now, will probably remove it at some point.
+        return new Pair<String, Boolean>(generateTrackUrl(trackId, md5origin, mediaVersion, quality), true);
     }
 
     public static String sanitize(String input) {
         return input.replaceAll("[\\\\/?*:%<>|\"]", "").replace("$", "\\$");
     }
 
-    public static String generateFilename(
-            String original,
-            JSONObject publicTrack,
-            JSONObject publicAlbum,
-            int newQuality
-    ) throws Exception {
+    public static String generateFilename(String original, JSONObject publicTrack, JSONObject publicAlbum, int newQuality) throws Exception {
         original = original.replaceAll("%title%", sanitize(publicTrack.getString("title")));
         original = original.replaceAll("%album%", sanitize(publicTrack.getJSONObject("album").getString("title")));
         original = original.replaceAll("%artist%", sanitize(publicTrack.getJSONObject("artist").getString("name")));
-
         // Album might not be available
         try {
-            original = original.replaceAll(
-                    "%albumArtist%",
-                    sanitize(publicAlbum.getJSONObject("artist").getString("name"))
-            );
+            original = original.replaceAll("%albumArtist%", sanitize(publicAlbum.getJSONObject("artist").getString("name")));
         } catch (Exception e) {
-            original = original.replaceAll(
-                    "%albumArtist%",
-                    sanitize(publicTrack.getJSONObject("artist").getString("name"))
-            );
+            original = original.replaceAll("%albumArtist%", sanitize(publicTrack.getJSONObject("artist").getString("name")));
         }
 
-        // Artists
+        //Artists
         StringBuilder artists = new StringBuilder();
         StringBuilder feats = new StringBuilder();
-        for (int i = 0; i < publicTrack.getJSONArray("contributors").length(); i++) {
+        for (int i=0; i<publicTrack.getJSONArray("contributors").length(); i++) {
             String artist = publicTrack.getJSONArray("contributors").getJSONObject(i).getString("name");
-            if (!artists.toString().contains(artist)) {
+            if (!artists.toString().contains(artist))
                 artists.append(", ").append(artist);
-            }
-            if (i > 0 && !artists.toString().contains(artist) && !feats.toString().contains(artist)) {
+            if (i > 0 && !artists.toString().contains(artist) && !feats.toString().contains(artist))
                 feats.append(", ").append(artist);
-            }
         }
-
         original = original.replaceAll("%artists%", sanitize(artists.toString()).substring(2));
-        if (feats.length() >= 2) {
+        if (feats.length() >= 2)
             original = original.replaceAll("%feats%", sanitize(feats.toString()).substring(2));
-        }
-
-        // Track number
+        //Track number
         int trackNumber = publicTrack.getInt("track_position");
         original = original.replaceAll("%trackNumber%", Integer.toString(trackNumber));
         original = original.replaceAll("%0trackNumber%", String.format("%02d", trackNumber));
-
-        // Year / Date
+        //Year
         original = original.replaceAll("%year%", publicTrack.getString("release_date").substring(0, 4));
         original = original.replaceAll("%date%", publicTrack.getString("release_date"));
 
-        // Remove leading dots
+        //Remove leading dots
         original = original.replaceAll("/\\.+", "/");
 
-        return original + extensionForQuality(newQuality);
+        if (newQuality == 9) return original + ".flac";
+        return original + ".mp3";
     }
 
-    // Deezer patched something so getting metadata of user uploaded MP3s is not working anymore
+    //Deezer patched something so getting metadata of user uploaded MP3s is not working anymore
     public static String generateUserUploadedMP3Filename(String original, String title) {
-        String[] ignored = {
-                "%feats%",
-                "%trackNumber%",
-                "%0trackNumber%",
-                "%year%",
-                "%date%",
-                "%album%",
-                "%artist%",
-                "%artists%",
-                "%albumArtist%"
-        };
-
+        String[] ignored = {"%feats%", "%trackNumber%", "%0trackNumber%", "%year%", "%date%", "%album%", "%artist%", "%artists%", "%albumArtist%"};
         for (String i : ignored) {
             original = original.replaceAll(i, "");
         }
@@ -540,19 +439,10 @@ public class Deezer {
         return original;
     }
 
-    // Tag track with data from API
-    public void tagTrack(
-            String path,
-            JSONObject publicTrack,
-            JSONObject publicAlbum,
-            String cover,
-            Lyrics lyricsData,
-            JSONObject privateJson,
-            DownloadService.DownloadSettings settings
-    ) throws Exception {
+    //Tag track with data from API
+    public void tagTrack(String path, JSONObject publicTrack, JSONObject publicAlbum, String cover, Lyrics lyricsData, JSONObject privateJson, DownloadService.DownloadSettings settings) throws Exception {
         TagOptionSingleton.getInstance().setAndroid(true);
-
-        // Load file
+        //Load file
         AudioFile f = AudioFileIO.read(new File(path));
         boolean isFlac = true;
         if (f.getAudioHeader().getFormat().contains("MPEG")) {
@@ -561,64 +451,32 @@ public class Deezer {
         }
         Tag tag = f.getTag();
 
-        if (settings.tags.title) {
-            tag.setField(FieldKey.TITLE, publicTrack.getString("title"));
-        }
-        if (settings.tags.album) {
-            tag.setField(FieldKey.ALBUM, publicTrack.getJSONObject("album").getString("title"));
-        }
-
-        // Artist
+        if (settings.tags.title) tag.setField(FieldKey.TITLE, publicTrack.getString("title"));
+        if (settings.tags.album) tag.setField(FieldKey.ALBUM, publicTrack.getJSONObject("album").getString("title"));
+        //Artist
         StringBuilder artists = new StringBuilder();
-        for (int i = 0; i < publicTrack.getJSONArray("contributors").length(); i++) {
+        for (int i=0; i<publicTrack.getJSONArray("contributors").length(); i++) {
             String artist = publicTrack.getJSONArray("contributors").getJSONObject(i).getString("name");
-            if (!artists.toString().contains(artist)) {
+            if (!artists.toString().contains(artist))
                 artists.append(settings.artistSeparator).append(artist);
-            }
         }
-
         boolean albumAvailable = !publicAlbum.has("error");
+        if (settings.tags.artist) tag.addField(FieldKey.ARTIST, artists.substring(settings.artistSeparator.length()));
+        if (settings.tags.track) tag.setField(FieldKey.TRACK, String.format("%02d", publicTrack.getInt("track_position")));
+        if (settings.tags.disc) tag.setField(FieldKey.DISC_NO, Integer.toString(publicTrack.getInt("disk_number")));
+        if (settings.tags.albumArtist && albumAvailable) tag.setField(FieldKey.ALBUM_ARTIST, publicAlbum.getJSONObject("artist").getString("name"));
+        if (settings.tags.date) tag.setField(FieldKey.YEAR, publicTrack.getString("release_date").substring(0, 4));
+        if (settings.tags.label && albumAvailable) tag.setField(FieldKey.RECORD_LABEL, publicAlbum.getString("label"));
+        if (settings.tags.isrc) tag.setField(FieldKey.ISRC, publicTrack.getString("isrc"));
+        if (settings.tags.upc && albumAvailable) tag.setField(FieldKey.BARCODE, publicAlbum.getString("upc"));
+        if (settings.tags.trackTotal && albumAvailable) tag.setField(FieldKey.TRACK_TOTAL, Integer.toString(publicAlbum.getInt("nb_tracks")));
 
-        if (settings.tags.artist) {
-            tag.addField(FieldKey.ARTIST, artists.substring(settings.artistSeparator.length()));
-        }
-        if (settings.tags.track) {
-            tag.setField(FieldKey.TRACK, String.format("%02d", publicTrack.getInt("track_position")));
-        }
-        if (settings.tags.disc) {
-            tag.setField(FieldKey.DISC_NO, Integer.toString(publicTrack.getInt("disk_number")));
-        }
-        if (settings.tags.albumArtist && albumAvailable) {
-            tag.setField(FieldKey.ALBUM_ARTIST, publicAlbum.getJSONObject("artist").getString("name"));
-        }
-        if (settings.tags.date) {
-            tag.setField(FieldKey.YEAR, publicTrack.getString("release_date").substring(0, 4));
-        }
-        if (settings.tags.label && albumAvailable) {
-            tag.setField(FieldKey.RECORD_LABEL, publicAlbum.getString("label"));
-        }
-        if (settings.tags.isrc) {
-            tag.setField(FieldKey.ISRC, publicTrack.getString("isrc"));
-        }
-        if (settings.tags.upc && albumAvailable) {
-            tag.setField(FieldKey.BARCODE, publicAlbum.getString("upc"));
-        }
-        if (settings.tags.trackTotal && albumAvailable) {
-            tag.setField(FieldKey.TRACK_TOTAL, Integer.toString(publicAlbum.getInt("nb_tracks")));
-        }
+        //BPM
+        if (publicTrack.has("bpm") && (int)publicTrack.getDouble("bpm") > 0)
+            if (settings.tags.bpm) tag.setField(FieldKey.BPM, Integer.toString((int)publicTrack.getDouble("bpm")));
 
-        // BPM
-        if (publicTrack.has("bpm") && (int) publicTrack.getDouble("bpm") > 0) {
-            if (settings.tags.bpm) {
-                tag.setField(FieldKey.BPM, Integer.toString((int) publicTrack.getDouble("bpm")));
-            }
-        }
-
-        // Unsynced lyrics
-        if (settings.tags.lyrics &&
-                lyricsData != null &&
-                lyricsData.getUnsyncedLyrics() != null &&
-                !lyricsData.getUnsyncedLyrics().isEmpty()) {
+        //Unsynced lyrics
+        if (settings.tags.lyrics && lyricsData != null && lyricsData.getUnsyncedLyrics() != null && !lyricsData.getUnsyncedLyrics().isEmpty()) {
             try {
                 tag.setField(FieldKey.LYRICS, lyricsData.getUnsyncedLyrics());
             } catch (Exception e) {
@@ -626,104 +484,80 @@ public class Deezer {
             }
         }
 
-        // Genres
+        //Genres
         StringBuilder genres = new StringBuilder();
         if (albumAvailable) {
-            for (int i = 0; i < publicAlbum.getJSONObject("genres").getJSONArray("data").length(); i++) {
-                String genre = publicAlbum
-                        .getJSONObject("genres")
-                        .getJSONArray("data")
-                        .getJSONObject(i)
-                        .getString("name");
-
+            for (int i=0; i<publicAlbum.getJSONObject("genres").getJSONArray("data").length(); i++) {
+                String genre = publicAlbum.getJSONObject("genres").getJSONArray("data").getJSONObject(0).getString("name");
                 if (!genres.toString().contains(genre)) {
                     genres.append(", ").append(genre);
                 }
             }
-
-            if (genres.length() > 2 && settings.tags.genre) {
+            if (genres.length() > 2 && settings.tags.genre)
                 tag.setField(FieldKey.GENRE, genres.substring(2));
-            }
         }
 
-        // Additional tags from private api
+        //Additional tags from private api
         if (settings.tags.contributors) {
             try {
                 if (privateJson != null && privateJson.has("SNG_CONTRIBUTORS")) {
                     JSONObject contrib = privateJson.getJSONObject("SNG_CONTRIBUTORS");
-
-                    // Composer
+                    //Composer
                     if (contrib.has("composer")) {
                         JSONArray composers = contrib.getJSONArray("composer");
                         StringBuilder composer = new StringBuilder();
-                        for (int i = 0; i < composers.length(); i++) {
+                        for (int i = 0; i < composers.length(); i++)
                             composer.append(settings.artistSeparator).append(composers.getString(i));
-                        }
-                        if (composer.length() > 2) {
+                        if (composer.length() > 2)
                             tag.setField(FieldKey.COMPOSER, composer.substring(settings.artistSeparator.length()));
-                        }
                     }
-
-                    // Engineer
+                    //Engineer
                     if (contrib.has("engineer")) {
                         JSONArray engineers = contrib.getJSONArray("engineer");
                         StringBuilder engineer = new StringBuilder();
-                        for (int i = 0; i < engineers.length(); i++) {
+                        for (int i = 0; i < engineers.length(); i++)
                             engineer.append(settings.artistSeparator).append(engineers.getString(i));
-                        }
-                        if (engineer.length() > 2) {
+                        if (engineer.length() > 2)
                             tag.setField(FieldKey.ENGINEER, engineer.substring(settings.artistSeparator.length()));
-                        }
                     }
-
-                    // Mixer
+                    //Mixer
                     if (contrib.has("mixer")) {
                         JSONArray mixers = contrib.getJSONArray("mixer");
                         StringBuilder mixer = new StringBuilder();
-                        for (int i = 0; i < mixers.length(); i++) {
+                        for (int i = 0; i < mixers.length(); i++)
                             mixer.append(settings.artistSeparator).append(mixers.getString(i));
-                        }
-                        if (mixer.length() > 2) {
+                        if (mixer.length() > 2)
                             tag.setField(FieldKey.MIXER, mixer.substring(settings.artistSeparator.length()));
-                        }
                     }
-
-                    // Producer
+                    //Producer
                     if (contrib.has("producer")) {
                         JSONArray producers = contrib.getJSONArray("producer");
                         StringBuilder producer = new StringBuilder();
-                        for (int i = 0; i < producers.length(); i++) {
+                        for (int i = 0; i < producers.length(); i++)
                             producer.append(settings.artistSeparator).append(producers.getString(i));
-                        }
-                        if (producer.length() > 2) {
+                        if (producer.length() > 2)
                             tag.setField(FieldKey.MIXER, producer.substring(settings.artistSeparator.length()));
-                        }
                     }
 
-                    // FLAC Only
+                    //FLAC Only
                     if (isFlac) {
-                        // Author
+                        //Author
                         if (contrib.has("author")) {
                             JSONArray authors = contrib.getJSONArray("author");
                             StringBuilder author = new StringBuilder();
-                            for (int i = 0; i < authors.length(); i++) {
+                            for (int i = 0; i < authors.length(); i++)
                                 author.append(settings.artistSeparator).append(authors.getString(i));
-                            }
-                            if (author.length() > 2) {
+                            if (author.length() > 2)
                                 ((FlacTag) tag).setField("AUTHOR", author.substring(settings.artistSeparator.length()));
-                            }
                         }
-
-                        // Writer
+                        //Writer
                         if (contrib.has("writer")) {
                             JSONArray writers = contrib.getJSONArray("writer");
                             StringBuilder writer = new StringBuilder();
-                            for (int i = 0; i < writers.length(); i++) {
+                            for (int i = 0; i < writers.length(); i++)
                                 writer.append(settings.artistSeparator).append(writers.getString(i));
-                            }
-                            if (writer.length() > 2) {
+                            if (writer.length() > 2)
                                 ((FlacTag) tag).setField("WRITER", writer.substring(settings.artistSeparator.length()));
-                            }
                         }
                     }
                 }
@@ -736,28 +570,23 @@ public class Deezer {
         boolean addCover = (coverFile.exists() && coverFile.length() > 0);
 
         if (isFlac) {
-            // FLAC Specific tags
-            if (settings.tags.date) {
-                ((FlacTag) tag).setField("DATE", publicTrack.getString("release_date"));
-            }
-
-            // Cover
+            //FLAC Specific tags
+            if (settings.tags.date) ((FlacTag)tag).setField("DATE", publicTrack.getString("release_date"));
+            //Cover
             if (addCover && settings.tags.albumArt) {
                 try (RandomAccessFile cf = new RandomAccessFile(coverFile, "r")) {
                     byte[] coverData = new byte[(int) cf.length()];
                     cf.read(coverData);
-                    tag.setField(
-                            ((FlacTag) tag).createArtworkField(
-                                    coverData,
-                                    PictureTypes.DEFAULT_ID,
-                                    ImageFormats.MIME_TYPE_JPEG,
-                                    "cover",
-                                    settings.albumArtResolution,
-                                    settings.albumArtResolution,
-                                    24,
-                                    0
-                            )
-                    );
+                    tag.setField(((FlacTag) tag).createArtworkField(
+                            coverData,
+                            PictureTypes.DEFAULT_ID,
+                            ImageFormats.MIME_TYPE_JPEG,
+                            "cover",
+                            settings.albumArtResolution,
+                            settings.albumArtResolution,
+                            24,
+                            0
+                    ));
                 } catch (Exception e) {
                     logger.warn("Error writing coverFile artwork: " + e);
                 }
@@ -769,41 +598,36 @@ public class Deezer {
             }
         }
 
-        // Save
+        //Save
         AudioFileIO.write(f);
     }
 
-    // Create LRC file content
+    //Create JSON file, privateJsonData = `song.getLyrics`
     public static String generateLRC(Lyrics lyricsData, JSONObject publicTrack) throws Exception {
         StringBuilder output = new StringBuilder();
 
-        // Create metadata
+        //Create metadata
         String title = publicTrack.getString("title");
         String album = publicTrack.getJSONObject("album").getString("title");
         StringBuilder artists = new StringBuilder();
-        for (int i = 0; i < publicTrack.getJSONArray("contributors").length(); i++) {
-            artists.append(", ").append(
-                    publicTrack.getJSONArray("contributors").getJSONObject(i).getString("name")
-            );
+        for (int i=0; i<publicTrack.getJSONArray("contributors").length(); i++) {
+            artists.append(", ").append(publicTrack.getJSONArray("contributors").getJSONObject(i).getString("name"));
         }
+        //Write metadata
+        output.append("[ar:").append(artists.substring(2)).append("]\r\n[al:").append(album).append("]\r\n[ti:").append(title).append("]\r\n");
 
-        // Write metadata
-        output.append("[ar:").append(artists.substring(2)).append("]\r\n")
-                .append("[al:").append(album).append("]\r\n")
-                .append("[ti:").append(title).append("]\r\n");
-
-        // Get lyrics
-        if (lyricsData.getSyncedLyrics() != null) {
-            for (int i = 0; i < lyricsData.getSyncedLyrics().size(); i++) {
+        //Get lyrics
+        int counter = 0;
+        if (lyricsData.getSyncedLyrics() != null){
+            for (int i=0; i<lyricsData.getSyncedLyrics().size(); i++) {
                 SynchronizedLyric lyric = lyricsData.getSyncedLyrics().get(i);
                 if (lyric.getLrcTimestamp() != null && lyric.getText() != null) {
-                    output.append(lyric.getLrcTimestamp())
-                            .append(lyric.getText())
-                            .append("\r\n");
+                    output.append(lyric.getLrcTimestamp()).append(lyric.getText()).append("\r\n");
+                    counter += 1;
                 }
             }
         }
-
+        
         return output.toString();
     }
 
@@ -817,14 +641,7 @@ public class Deezer {
         DownloadLog logger;
         boolean encrypted;
 
-        QualityInfo(
-                int quality,
-                String trackId,
-                String trackToken,
-                String md5origin,
-                String mediaVersion,
-                DownloadLog logger
-        ) {
+        QualityInfo(int quality, String trackId, String trackToken, String md5origin, String mediaVersion, DownloadLog logger) {
             this.quality = quality;
             this.initialQuality = quality;
             this.trackId = trackId;
@@ -835,48 +652,36 @@ public class Deezer {
         }
 
         String fallback(Deezer deezer) {
-            // Quality fallback
+            //Quality fallback
             try {
                 String url = qualityFallback(deezer);
-
-                // No quality
-                if (quality == -1) {
+                //No quality
+                if (quality == -1)
                     throw new Exception("No quality to fallback to!");
-                }
 
-                // Success
+                //Success
                 return url;
             } catch (Exception e) {
                 logger.warn("Quality fallback failed! ID: " + trackId + " " + e);
                 quality = initialQuality;
             }
 
-            // Track ID fallback
+            //Track ID Fallback
             JSONObject privateJson = null;
             try {
-                JSONObject privateRaw = deezer.callGWAPI(
-                        "deezer.pageTrack",
-                        "{\"sng_id\": \"" + trackId + "\"}"
-                );
+                //Fetch meta
+                JSONObject privateRaw = deezer.callGWAPI("deezer.pageTrack", "{\"sng_id\": \"" + trackId + "\"}");
                 privateJson = privateRaw.getJSONObject("results").getJSONObject("DATA");
-
                 if (privateJson.has("FALLBACK")) {
+                    //Fetch new track
                     String fallbackId = privateJson.getJSONObject("FALLBACK").getString("SNG_ID");
                     if (!fallbackId.equals(trackId)) {
-                        JSONObject newPrivate = deezer.callGWAPI(
-                                "song.getListData",
-                                "{\"sng_ids\": [" + fallbackId + "]}"
-                        );
-                        JSONObject trackData = newPrivate
-                                .getJSONObject("results")
-                                .getJSONArray("data")
-                                .getJSONObject(0);
-
+                        JSONObject newPrivate = deezer.callGWAPI("song.getListData", "{\"sng_ids\": [" + fallbackId + "]}");
+                        JSONObject trackData = newPrivate.getJSONObject("results").getJSONArray("data").getJSONObject(0);
                         trackId = trackData.getString("SNG_ID");
                         trackToken = trackData.getString("TRACK_TOKEN");
                         md5origin = trackData.getString("MD5_ORIGIN");
                         mediaVersion = trackData.getString("MEDIA_VERSION");
-
                         return fallback(deezer);
                     }
                 }
@@ -888,15 +693,14 @@ public class Deezer {
         }
 
         private String qualityFallback(Deezer deezer) throws Exception {
-            Pair<String, Boolean> urlGen =
-                    deezer.getTrackUrl(trackId, trackToken, md5origin, mediaVersion, quality, 0);
-
+            Pair<String,Boolean> urlGen = deezer.getTrackUrl(trackId, trackToken, md5origin, mediaVersion, quality, 0);
             this.encrypted = urlGen.second;
 
-            // initialize as "404 Not Found"
+            // initialise as "404 Not Found"
             int urlResponseCode = 404;
 
             if (urlGen.first != null) {
+                //Create HEAD requests to check if exists
                 URL url = new URL(urlGen.first);
                 HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
                 connection.setRequestMethod("HEAD");
@@ -905,23 +709,20 @@ public class Deezer {
                 connection.setRequestProperty("Accept", "*/*");
                 urlResponseCode = connection.getResponseCode();
             }
-
-            // Track not available
+            //Track not available
             if (urlResponseCode > 400) {
                 logger.warn("Quality fallback, response code: " + urlResponseCode + ", current: " + quality);
-
-                // -1 if no quality available
+                //-1 if no quality available
                 if (quality == 1) {
                     quality = -1;
                     return null;
                 }
                 if (quality == 3) quality = 1;
                 if (quality == 9) quality = 3;
-
                 return qualityFallback(deezer);
             }
-
             return urlGen.first;
         }
+
     }
 }

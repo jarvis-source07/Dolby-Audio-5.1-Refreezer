@@ -608,15 +608,15 @@ class DownloadManager {
     return true;
   }
 
-  Future<void> addOfflineAlbum(Album album, {bool private = true}) async {
+  Future<bool> addOfflineAlbum(Album album, {bool private = true}) async {
     // Permission
-    if (!private && !(await checkPermission())) return;
+    if (!private && !(await checkPermission())) return false;
 
     // Ask for quality
     AudioQuality? quality;
     if (!private && settings.downloadQuality == AudioQuality.ASK) {
       quality = await qualitySelect();
-      if (quality == null) return;
+      if (quality == null) return false;
     }
 
     // Get from API if no tracks
@@ -630,7 +630,7 @@ class DownloadManager {
       DefaultCacheManager().getSingleFile(album.art?.thumb ?? '');
       DefaultCacheManager().getSingleFile(album.art?.full ?? '');
 
-      final Batch b = db!.batch();
+      Batch b = db!.batch();
       b.insert(
         'Albums',
         album.toSQL(off: true),
@@ -638,7 +638,7 @@ class DownloadManager {
       );
 
       for (final Track t in album.tracks ?? []) {
-        await _addTrackToDB(b, t, false);
+        b = await _addTrackToDB(b, t, false);
       }
       await b.commit();
     }
@@ -655,24 +655,26 @@ class DownloadManager {
         ),
       );
     }
+
     await platform.invokeMethod('addDownloads', out);
     await start();
+    return true;
   }
 
-  Future<void> addOfflinePlaylist(
+  Future<bool> addOfflinePlaylist(
     Playlist playlist, {
     bool private = true,
     AudioQuality? quality,
   }) async {
     // Permission
-    if (!private && !(await checkPermission())) return;
+    if (!private && !(await checkPermission())) return false;
 
     // Ask for quality
     if (!private &&
         settings.downloadQuality == AudioQuality.ASK &&
         quality == null) {
       quality = await qualitySelect();
-      if (quality == null) return;
+      if (quality == null) return false;
     }
 
     // Get tracks if missing
@@ -683,7 +685,7 @@ class DownloadManager {
 
     // Add to DB
     if (private) {
-      final Batch b = db!.batch();
+      Batch b = db!.batch();
       b.insert(
         'Playlists',
         playlist.toSQL(),
@@ -691,7 +693,7 @@ class DownloadManager {
       );
 
       for (final Track t in (playlist.tracks ?? [])) {
-        await _addTrackToDB(b, t, false);
+        b = await _addTrackToDB(b, t, false);
 
         // Cache art
         DefaultCacheManager().getSingleFile(t.albumArt?.thumb ?? '');
@@ -718,8 +720,10 @@ class DownloadManager {
         ),
       );
     }
+
     await platform.invokeMethod('addDownloads', out);
     await start();
+    return true;
   }
 
   // Get track and meta from offline DB
@@ -1129,10 +1133,11 @@ class DownloadManager {
 
     try {
       effectiveSettings = overrideSettings ?? settings;
-    } on LateInitializationError catch (e) {
+    } catch (e, st) {
       Logger.root.warning(
-        'Skipping updateServiceSettings because global settings is not ready yet.',
+        'Skipping updateServiceSettings because settings is not ready yet.',
         e,
+        st,
       );
       return;
     }
