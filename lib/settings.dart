@@ -222,13 +222,13 @@ class Settings {
   }
 
   // JSON to forward into download service
-  Map getServiceSettings() {
+  Map<String, dynamic> getServiceSettings() {
     return {'json': jsonEncode(toJson())};
   }
 
   Future<void> updateAppIcon(String iconKey) async {
     try {
-      LauncherIcon icon =
+      final LauncherIcon icon =
           LauncherIcon.values.firstWhere((e) => e.key == iconKey);
       await AppIconChanger.changeIcon(icon);
       appIcon = iconKey;
@@ -262,34 +262,53 @@ class Settings {
         inactiveTrackColor: primaryColor.withOpacity(0.2),
       );
 
+  Future<void> _writeToDisk() async {
+    final File f = File(await getPath());
+    await f.writeAsString(jsonEncode(toJson()));
+  }
+
   // Load settings/init
   Future<Settings> loadSettings() async {
-    String path = await getPath();
-    File f = File(path);
+    final String path = await getPath();
+    final File f = File(path);
 
     if (await f.exists()) {
-      String data = await f.readAsString();
+      final String data = await f.readAsString();
       return Settings.fromJson(jsonDecode(data));
     }
 
-    Settings s = Settings.fromJson({});
+    final Settings s = Settings.fromJson({});
 
     // Set default path, because async
     s.downloadPath = await ExternalPath.getExternalStoragePublicDirectory(
       ExternalPath.DIRECTORY_MUSIC,
     );
 
-    await s.save();
+    // IMPORTANT:
+    // On first run, write settings file only.
+    // Do NOT push to download service yet, because global late `settings`
+    // has not been assigned in prepareRun() at this point.
+    await s._writeToDisk();
+
     return s;
   }
 
-  Future<void> save() async {
-    File f = File(await getPath());
-    await f.writeAsString(jsonEncode(toJson()));
-    await downloadManager.updateServiceSettings();
+  Future<void> save({bool updateDownloadService = true}) async {
+    await _writeToDisk();
+
+    if (updateDownloadService) {
+      await downloadManager.updateServiceSettings(this);
+    }
   }
 
   Future<void> updateAudioServiceQuality() async {
+    if (!GetIt.I.isRegistered<AudioPlayerHandler>()) {
+      Logger.root.info(
+        'Audio service not registered yet, skipping updateQueueQuality.',
+      );
+      return;
+    }
+
     await GetIt.I<AudioPlayerHandler>().updateQueueQuality();
   }
 
@@ -298,6 +317,8 @@ class Settings {
   Future<void> setPlaybackMode(PlaybackMode mode) async {
     playbackMode = mode;
     await save();
+
+    if (!GetIt.I.isRegistered<AudioPlayerHandler>()) return;
 
     try {
       await GetIt.I<AudioPlayerHandler>().reloadQueueForPlaybackModeChange();
@@ -315,6 +336,7 @@ class Settings {
     await save();
 
     if (!isSurroundMode) return;
+    if (!GetIt.I.isRegistered<AudioPlayerHandler>()) return;
 
     try {
       await GetIt.I<AudioPlayerHandler>().reloadQueueForPlaybackModeChange();
@@ -585,8 +607,7 @@ class Settings {
             ),
           ),
           bottomAppBarTheme: const BottomAppBarTheme(color: deezerBottom),
-          dialogTheme:
-              const DialogThemeData(backgroundColor: deezerBottom),
+          dialogTheme: const DialogThemeData(backgroundColor: deezerBottom),
         ),
         Themes.Black: ThemeData(
           useMaterial3: false,
@@ -657,8 +678,7 @@ class Settings {
             ),
           ),
           bottomAppBarTheme: const BottomAppBarTheme(color: Colors.black),
-          dialogTheme:
-              const DialogThemeData(backgroundColor: Colors.black),
+          dialogTheme: const DialogThemeData(backgroundColor: Colors.black),
         ),
       };
 

@@ -63,6 +63,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   // Prevent MediaItem change while shuffling or otherwise rearranging
   bool _rearranging = false;
 
+  // Prevent duplicate queue load races
+  bool _queueLoadInProgress = false;
+
   Scrobblenaut? _scrobblenaut;
   bool _scrobblenautReady = false;
 
@@ -1250,39 +1253,50 @@ class AudioPlayerHandler extends BaseAudioHandler
     int index, {
     Duration position = Duration.zero,
   }) async {
+    if (_queueLoadInProgress) {
+      Logger.root.warning(
+        'Queue load already in progress, skipping duplicate request.',
+      );
+      return;
+    }
+
+    _queueLoadInProgress = true;
     _requestedIndex = index;
 
-    await _playlist.clear();
-
     try {
-      await _playlist.addAll(await _itemsToSources(newQueue));
-    } catch (e, st) {
-      Logger.root.warning(
-        'Error building queue with current playback mode, falling back to original sources.',
-        e,
-        st,
-      );
-
       await _playlist.clear();
-      await _playlist.addAll(
-        await _itemsToSources(newQueue, forceOriginal: true),
-      );
+
+      try {
+        await _playlist.addAll(await _itemsToSources(newQueue));
+      } catch (e, st) {
+        Logger.root.warning(
+          'Error building queue with current playback mode, falling back to original sources.',
+          e,
+          st,
+        );
+
+        await _playlist.clear();
+        await _playlist.addAll(
+          await _itemsToSources(newQueue, forceOriginal: true),
+        );
+      }
+
+      // DO NOT manually call queue.add(newQueue) here.
+      // queue is already driven by just_audio sequenceStateStream.
+
+      await _waitForPlayerReadiness();
+
+      try {
+        await _player.seek(position, index: index);
+        _nativeBasePosition = Duration.zero;
+        await _player.setVolume(1.0);
+      } catch (e, st) {
+        Logger.root.severe('Error loading tracks', e, st);
+      }
+    } finally {
+      _requestedIndex = -1;
+      _queueLoadInProgress = false;
     }
-
-    // Helpful immediate queue broadcast for UI
-    queue.add(newQueue);
-
-    await _waitForPlayerReadiness();
-
-    try {
-      await _player.seek(position, index: index);
-      _nativeBasePosition = Duration.zero;
-      await _player.setVolume(1.0);
-    } catch (e, st) {
-      Logger.root.severe('Error loading tracks', e, st);
-    }
-
-    _requestedIndex = -1;
   }
 
   /// Replace queue and play specified item index
