@@ -1,67 +1,41 @@
 package r.r.refreezer;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import android.util.Log;
 
 import java.io.File;
-import java.util.Locale;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 
 /**
- * Base abstraction for stereo -> surround artifact processing.
+ * SurroundProcessor
  *
- * Subclasses (for example FFmpegSurroundProcessor) implement actual rendering/muxing.
+ * Starter processing layer for future:
+ *  Stereo source -> derived surround -> AC3 -> optional TS mux
+ *
+ * IMPORTANT:
+ * - This is a compile-safe starter.
+ * - It does NOT perform real surround rendering yet.
+ * - It provides the structure where actual encoder / mux logic will be added.
  */
-public abstract class SurroundProcessor {
+public class SurroundProcessor {
 
-    // -------------------------------------------------------------------------
-    // Enums
-    // -------------------------------------------------------------------------
+    private static final String TAG = "SurroundProcessor";
 
     public enum OutputMode {
-        AC3("ac3"),
-        TS("ts");
-
-        private final String extension;
-
-        OutputMode(String extension) {
-            this.extension = extension;
-        }
-
-        public String extension() {
-            return extension;
-        }
-
-        public static OutputMode fromString(@Nullable String raw) {
-            if (raw == null) return AC3;
-
-            String v = raw.trim().toLowerCase(Locale.US);
-            if ("ts".equals(v) || "mpegts".equals(v)) {
-                return TS;
-            }
-            return AC3;
-        }
+        AC3,
+        TS
     }
 
     public enum Preset {
-        BALANCED("balanced"),
-        WIDE("wide"),
-        CINEMATIC("cinematic");
+        BALANCED,
+        WIDE,
+        CINEMATIC;
 
-        private final String value;
+        public static Preset fromString(String value) {
+            if (value == null) return BALANCED;
 
-        Preset(String value) {
-            this.value = value;
-        }
-
-        public String value() {
-            return value;
-        }
-
-        public static Preset fromString(@Nullable String raw) {
-            if (raw == null) return BALANCED;
-
-            String v = raw.trim().toLowerCase(Locale.US);
-            switch (v) {
+            switch (value.trim().toLowerCase()) {
                 case "wide":
                     return WIDE;
                 case "cinematic":
@@ -71,18 +45,26 @@ public abstract class SurroundProcessor {
                     return BALANCED;
             }
         }
+
+        public String value() {
+            switch (this) {
+                case WIDE:
+                    return "wide";
+                case CINEMATIC:
+                    return "cinematic";
+                case BALANCED:
+                default:
+                    return "balanced";
+            }
+        }
     }
 
-    // -------------------------------------------------------------------------
-    // Config
-    // -------------------------------------------------------------------------
-
     public static class Config {
-        @Nullable public final String trackId;
-        @Nullable public final String inputPath;
-        @Nullable public final String outputPath;
-        @NonNull public final OutputMode outputMode;
-        @NonNull public final Preset preset;
+        public final String trackId;
+        public final String inputPath;
+        public final String outputPath;
+        public final OutputMode outputMode;
+        public final Preset preset;
         public final boolean overwrite;
         public final boolean debugPassthrough;
         public final int bitrateKbps;
@@ -103,38 +85,38 @@ public abstract class SurroundProcessor {
         }
 
         public static class Builder {
-            @Nullable private String trackId;
-            @Nullable private String inputPath;
-            @Nullable private String outputPath;
-            @NonNull private OutputMode outputMode = OutputMode.AC3;
-            @NonNull private Preset preset = Preset.BALANCED;
-            private boolean overwrite = false;
+            private String trackId;
+            private String inputPath;
+            private String outputPath;
+            private OutputMode outputMode = OutputMode.TS;
+            private Preset preset = Preset.BALANCED;
+            private boolean overwrite = true;
             private boolean debugPassthrough = false;
             private int bitrateKbps = 448;
             private int sampleRateHz = 48000;
             private int outputChannels = 6;
 
-            public Builder setTrackId(@Nullable String trackId) {
+            public Builder setTrackId(String trackId) {
                 this.trackId = trackId;
                 return this;
             }
 
-            public Builder setInputPath(@Nullable String inputPath) {
+            public Builder setInputPath(String inputPath) {
                 this.inputPath = inputPath;
                 return this;
             }
 
-            public Builder setOutputPath(@Nullable String outputPath) {
+            public Builder setOutputPath(String outputPath) {
                 this.outputPath = outputPath;
                 return this;
             }
 
-            public Builder setOutputMode(@NonNull OutputMode outputMode) {
+            public Builder setOutputMode(OutputMode outputMode) {
                 this.outputMode = outputMode;
                 return this;
             }
 
-            public Builder setPreset(@NonNull Preset preset) {
+            public Builder setPreset(Preset preset) {
                 this.preset = preset;
                 return this;
             }
@@ -170,33 +152,31 @@ public abstract class SurroundProcessor {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Result
-    // -------------------------------------------------------------------------
-
     public static class Result {
         public final boolean success;
-        @Nullable public final String trackId;
-        @Nullable public final String inputPath;
-        @Nullable public final String outputPath;
-        @NonNull public final String codec;
-        @NonNull public final String container;
-        @NonNull public final String preset;
+        public final String trackId;
+        public final String inputPath;
+        public final String outputPath;
+        public final String codec;
+        public final String container;
+        public final String preset;
         public final long inputBytes;
         public final long outputBytes;
-        @Nullable public final String message;
+        public final String message;
+        public final String error;
 
         private Result(
                 boolean success,
-                @Nullable String trackId,
-                @Nullable String inputPath,
-                @Nullable String outputPath,
-                @NonNull String codec,
-                @NonNull String container,
-                @NonNull String preset,
+                String trackId,
+                String inputPath,
+                String outputPath,
+                String codec,
+                String container,
+                String preset,
                 long inputBytes,
                 long outputBytes,
-                @Nullable String message
+                String message,
+                String error
         ) {
             this.success = success;
             this.trackId = trackId;
@@ -208,18 +188,19 @@ public abstract class SurroundProcessor {
             this.inputBytes = inputBytes;
             this.outputBytes = outputBytes;
             this.message = message;
+            this.error = error;
         }
 
         public static Result success(
-                @Nullable String trackId,
-                @Nullable String inputPath,
-                @Nullable String outputPath,
-                @NonNull String codec,
-                @NonNull String container,
-                @NonNull String preset,
+                String trackId,
+                String inputPath,
+                String outputPath,
+                String codec,
+                String container,
+                String preset,
                 long inputBytes,
                 long outputBytes,
-                @Nullable String message
+                String message
         ) {
             return new Result(
                     true,
@@ -231,20 +212,21 @@ public abstract class SurroundProcessor {
                     preset,
                     inputBytes,
                     outputBytes,
-                    message
+                    message,
+                    null
             );
         }
 
         public static Result failure(
-                @Nullable String trackId,
-                @Nullable String inputPath,
-                @Nullable String outputPath,
-                @NonNull String codec,
-                @NonNull String container,
-                @NonNull String preset,
+                String trackId,
+                String inputPath,
+                String outputPath,
+                String codec,
+                String container,
+                String preset,
                 long inputBytes,
                 long outputBytes,
-                @Nullable String message
+                String error
         ) {
             return new Result(
                     false,
@@ -256,183 +238,253 @@ public abstract class SurroundProcessor {
                     preset,
                     inputBytes,
                     outputBytes,
-                    message
+                    null,
+                    error
             );
+        }
+
+        @Override
+        public String toString() {
+            return "Result{" +
+                    "success=" + success +
+                    ", trackId='" + trackId + '\'' +
+                    ", inputPath='" + inputPath + '\'' +
+                    ", outputPath='" + outputPath + '\'' +
+                    ", codec='" + codec + '\'' +
+                    ", container='" + container + '\'' +
+                    ", preset='" + preset + '\'' +
+                    ", inputBytes=" + inputBytes +
+                    ", outputBytes=" + outputBytes +
+                    ", message='" + message + '\'' +
+                    ", error='" + error + '\'' +
+                    '}';
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Base process flow
-    // -------------------------------------------------------------------------
-
     /**
-     * Generic processing flow:
-     * - If AC3 output requested -> render AC3 master directly
-     * - If TS requested -> render temp AC3 master, then mux to TS
+     * Main starter entrypoint.
      *
-     * Subclasses can override if they want custom handling.
+     * Current behavior:
+     * - Validates input/output
+     * - Supports debug passthrough copy
+     * - Returns placeholder failure for real surround generation (until encoder is wired)
      */
-    public Result process(@Nullable Config config) {
+    public Result process(Config config) {
         if (config == null) {
             return Result.failure(
-                    null,
-                    null,
-                    null,
+                    null, null, null,
                     "AC3",
-                    "ac3",
+                    "ts",
                     "balanced",
-                    0,
-                    0,
+                    0, 0,
                     "Config is null"
             );
         }
 
-        if (config.inputPath == null || config.inputPath.trim().isEmpty()) {
+        File inputFile = new File(config.inputPath == null ? "" : config.inputPath);
+        File outputFile = new File(config.outputPath == null ? "" : config.outputPath);
+
+        if (!inputFile.exists() || !inputFile.isFile()) {
             return Result.failure(
                     config.trackId,
-                    null,
+                    config.inputPath,
                     config.outputPath,
                     "AC3",
                     containerLabel(config.outputMode),
                     config.preset.value(),
                     0,
                     0,
-                    "Input path is empty"
+                    "Input file not found"
             );
         }
 
-        String finalOutputPath = config.outputPath;
-        if (finalOutputPath == null || finalOutputPath.trim().isEmpty()) {
-            finalOutputPath = buildOutputPath(
+        if (!ensureParentDirectory(outputFile)) {
+            return Result.failure(
+                    config.trackId,
                     config.inputPath,
-                    buildPresetSuffix(config.preset),
-                    config.outputMode
+                    config.outputPath,
+                    "AC3",
+                    containerLabel(config.outputMode),
+                    config.preset.value(),
+                    safeLength(inputFile),
+                    0,
+                    "Failed to create output directory"
             );
         }
 
-        File inputFile = new File(config.inputPath);
-        File finalOutputFile = new File(finalOutputPath);
-
-        if (config.outputMode == OutputMode.AC3) {
-            return renderToAc3Master(config, inputFile, finalOutputFile);
-        }
-
-        // TS mode => render temp AC3 first
-        File ac3Temp = new File(
-                buildOutputPath(
+        if (outputFile.exists()) {
+            if (config.overwrite) {
+                boolean deleted = outputFile.delete();
+                if (!deleted) {
+                    return Result.failure(
+                            config.trackId,
+                            config.inputPath,
+                            config.outputPath,
+                            "AC3",
+                            containerLabel(config.outputMode),
+                            config.preset.value(),
+                            safeLength(inputFile),
+                            safeLength(outputFile),
+                            "Failed to overwrite existing output file"
+                    );
+                }
+            } else {
+                return Result.success(
+                        config.trackId,
                         config.inputPath,
-                        buildPresetSuffix(config.preset) + "_master",
-                        OutputMode.AC3
-                )
-        );
-
-        Result ac3Result = renderToAc3Master(config, inputFile, ac3Temp);
-        if (!ac3Result.success) {
-            return ac3Result;
-        }
-
-        Result tsResult = muxAc3ToTs(config, ac3Temp, finalOutputFile);
-
-        if (ac3Temp.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            ac3Temp.delete();
-        }
-
-        return tsResult;
-    }
-
-    // -------------------------------------------------------------------------
-    // Helpers for subclasses
-    // -------------------------------------------------------------------------
-
-    protected String buildPresetSuffix(@Nullable Preset preset) {
-        return preset == null ? "balanced" : preset.value();
-    }
-
-    protected String containerLabel(@Nullable OutputMode outputMode) {
-        return outputMode == OutputMode.TS ? "ts" : "ac3";
-    }
-
-    protected String buildOutputPath(
-            @Nullable String inputPath,
-            @Nullable String suffix,
-            @NonNull OutputMode outputMode
-    ) {
-        String baseName = "surround_output";
-
-        if (inputPath != null && !inputPath.trim().isEmpty()) {
-            try {
-                String clean = inputPath;
-
-                int queryIndex = clean.indexOf('?');
-                if (queryIndex >= 0) {
-                    clean = clean.substring(0, queryIndex);
-                }
-
-                int slash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf(File.separatorChar));
-                if (slash >= 0 && slash + 1 < clean.length()) {
-                    clean = clean.substring(slash + 1);
-                }
-
-                int dot = clean.lastIndexOf('.');
-                if (dot > 0) {
-                    clean = clean.substring(0, dot);
-                }
-
-                clean = clean.trim();
-                if (!clean.isEmpty()) {
-                    baseName = sanitizeFileComponent(clean);
-                }
-            } catch (Throwable ignored) {
+                        config.outputPath,
+                        "AC3",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        safeLength(inputFile),
+                        safeLength(outputFile),
+                        "Output already exists"
+                );
             }
         }
 
-        String safeSuffix = (suffix == null || suffix.trim().isEmpty())
-                ? ""
-                : "_" + sanitizeFileComponent(suffix.trim());
-
-        String extension = outputMode.extension();
-
-        String parentDir;
-        if (inputPath != null &&
-                !inputPath.startsWith("http://") &&
-                !inputPath.startsWith("https://") &&
-                !inputPath.startsWith("content://")) {
-            File inputFile = new File(inputPath);
-            File parent = inputFile.getParentFile();
-            parentDir = (parent != null) ? parent.getAbsolutePath() : ".";
-        } else {
-            parentDir = ".";
+        // Debug path: just copy input to output to validate file plumbing
+        if (config.debugPassthrough) {
+            try {
+                copyFile(inputFile, outputFile);
+                return Result.success(
+                        config.trackId,
+                        config.inputPath,
+                        config.outputPath,
+                        "PASSTHROUGH",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        safeLength(inputFile),
+                        safeLength(outputFile),
+                        "Debug passthrough copy complete"
+                );
+            } catch (Exception e) {
+                Log.e(TAG, "Debug passthrough failed", e);
+                return Result.failure(
+                        config.trackId,
+                        config.inputPath,
+                        config.outputPath,
+                        "PASSTHROUGH",
+                        containerLabel(config.outputMode),
+                        config.preset.value(),
+                        safeLength(inputFile),
+                        safeLength(outputFile),
+                        "Debug passthrough failed: " + e.getMessage()
+                );
+            }
         }
 
-        return new File(parentDir, baseName + safeSuffix + "." + extension).getAbsolutePath();
+        // Real future route:
+        // 1) decode / inspect stereo input
+        // 2) render derived surround bed according to preset
+        // 3) encode AC3 master artifact
+        // 4) if outputMode == TS => mux AC3 into TS
+        //
+        // For now return placeholder failure so behavior is honest.
+        return Result.failure(
+                config.trackId,
+                config.inputPath,
+                config.outputPath,
+                "AC3",
+                containerLabel(config.outputMode),
+                config.preset.value(),
+                safeLength(inputFile),
+                0,
+                "Surround engine backend not connected yet"
+        );
     }
 
-    protected String sanitizeFileComponent(@NonNull String input) {
-        String sanitized = input.replaceAll("[\\\\/:*?\"<>|]", "_");
-        sanitized = sanitized.replaceAll("\\s+", "_");
-        sanitized = sanitized.replaceAll("_+", "_");
-        sanitized = sanitized.replaceAll("^_+", "");
-        sanitized = sanitized.replaceAll("_+$", "");
-        if (sanitized.isEmpty()) {
-            sanitized = "file";
+    /**
+     * Future hook:
+     * Stereo decode + matrix render + AC3 encode
+     */
+    protected Result renderToAc3Master(Config config, File inputFile, File ac3OutputFile) {
+        return Result.failure(
+                config.trackId,
+                inputFile.getAbsolutePath(),
+                ac3OutputFile.getAbsolutePath(),
+                "AC3",
+                "ac3",
+                config.preset.value(),
+                safeLength(inputFile),
+                safeLength(ac3OutputFile),
+                "AC3 renderer not implemented yet"
+        );
+    }
+
+    /**
+     * Future hook:
+     * Mux already encoded AC3 into MPEG-TS container
+     */
+    protected Result muxAc3ToTs(Config config, File ac3InputFile, File tsOutputFile) {
+        return Result.failure(
+                config.trackId,
+                ac3InputFile.getAbsolutePath(),
+                tsOutputFile.getAbsolutePath(),
+                "AC3",
+                "ts",
+                config.preset.value(),
+                safeLength(ac3InputFile),
+                safeLength(tsOutputFile),
+                "TS muxer not implemented yet"
+        );
+    }
+
+    public static String containerLabel(OutputMode outputMode) {
+        return outputMode == OutputMode.AC3 ? "ac3" : "ts";
+    }
+
+    public static String defaultExtension(OutputMode outputMode) {
+        return outputMode == OutputMode.AC3 ? "ac3" : "ts";
+    }
+
+    /**
+     * Useful path builder for future output naming.
+     *
+     * Example:
+     * input = /music/song.flac
+     * suffix = surround_balanced
+     * mode = TS
+     * => /music/song_surround_balanced.ts
+     */
+    public static String buildOutputPath(
+            String inputPath,
+            String suffix,
+            OutputMode mode
+    ) {
+        return Deezer.buildDerivedOutputPath(
+                inputPath,
+                suffix,
+                defaultExtension(mode)
+        );
+    }
+
+    public static String buildPresetSuffix(Preset preset) {
+        return "surround_" + preset.value();
+    }
+
+    private static boolean ensureParentDirectory(File outputFile) {
+        File parent = outputFile.getParentFile();
+        if (parent == null) return true;
+        if (parent.exists()) return true;
+        return parent.mkdirs();
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        try (FileInputStream fis = new FileInputStream(src);
+             FileOutputStream fos = new FileOutputStream(dst)) {
+
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = fis.read(buffer)) != -1) {
+                fos.write(buffer, 0, read);
+            }
+            fos.flush();
         }
-        return sanitized;
     }
 
-    // -------------------------------------------------------------------------
-    // Abstract hooks implemented by subclasses
-    // -------------------------------------------------------------------------
-
-    protected abstract Result renderToAc3Master(
-            Config config,
-            File inputFile,
-            File ac3OutputFile
-    );
-
-    protected abstract Result muxAc3ToTs(
-            Config config,
-            File ac3InputFile,
-            File tsOutputFile
-    );
+    private static long safeLength(File file) {
+        if (file == null || !file.exists()) return 0;
+        return file.length();
+    }
 }
