@@ -11,7 +11,7 @@ import java.io.IOException;
  * SurroundProcessor
  *
  * Starter processing layer for future:
- *  Stereo source -> derived surround -> AC3 -> optional TS mux
+ * Stereo source -> derived surround -> AC3 -> optional TS mux
  *
  * IMPORTANT:
  * - This is a compile-safe starter.
@@ -112,12 +112,16 @@ public class SurroundProcessor {
             }
 
             public Builder setOutputMode(OutputMode outputMode) {
-                this.outputMode = outputMode;
+                if (outputMode != null) {
+                    this.outputMode = outputMode;
+                }
                 return this;
             }
 
             public Builder setPreset(Preset preset) {
-                this.preset = preset;
+                if (preset != null) {
+                    this.preset = preset;
+                }
                 return this;
             }
 
@@ -272,14 +276,20 @@ public class SurroundProcessor {
     public Result process(Config config) {
         if (config == null) {
             return Result.failure(
-                    null, null, null,
+                    null,
+                    null,
+                    null,
                     "AC3",
                     "ts",
                     "balanced",
-                    0, 0,
+                    0,
+                    0,
                     "Config is null"
             );
         }
+
+        String presetValue = config.preset != null ? config.preset.value() : Preset.BALANCED.value();
+        OutputMode outputMode = config.outputMode != null ? config.outputMode : OutputMode.TS;
 
         File inputFile = new File(config.inputPath == null ? "" : config.inputPath);
         File outputFile = new File(config.outputPath == null ? "" : config.outputPath);
@@ -290,8 +300,8 @@ public class SurroundProcessor {
                     config.inputPath,
                     config.outputPath,
                     "AC3",
-                    containerLabel(config.outputMode),
-                    config.preset.value(),
+                    containerLabel(outputMode),
+                    presetValue,
                     0,
                     0,
                     "Input file not found"
@@ -304,8 +314,8 @@ public class SurroundProcessor {
                     config.inputPath,
                     config.outputPath,
                     "AC3",
-                    containerLabel(config.outputMode),
-                    config.preset.value(),
+                    containerLabel(outputMode),
+                    presetValue,
                     safeLength(inputFile),
                     0,
                     "Failed to create output directory"
@@ -321,8 +331,8 @@ public class SurroundProcessor {
                             config.inputPath,
                             config.outputPath,
                             "AC3",
-                            containerLabel(config.outputMode),
-                            config.preset.value(),
+                            containerLabel(outputMode),
+                            presetValue,
                             safeLength(inputFile),
                             safeLength(outputFile),
                             "Failed to overwrite existing output file"
@@ -334,8 +344,8 @@ public class SurroundProcessor {
                         config.inputPath,
                         config.outputPath,
                         "AC3",
-                        containerLabel(config.outputMode),
-                        config.preset.value(),
+                        containerLabel(outputMode),
+                        presetValue,
                         safeLength(inputFile),
                         safeLength(outputFile),
                         "Output already exists"
@@ -352,8 +362,8 @@ public class SurroundProcessor {
                         config.inputPath,
                         config.outputPath,
                         "PASSTHROUGH",
-                        containerLabel(config.outputMode),
-                        config.preset.value(),
+                        containerLabel(outputMode),
+                        presetValue,
                         safeLength(inputFile),
                         safeLength(outputFile),
                         "Debug passthrough copy complete"
@@ -365,8 +375,8 @@ public class SurroundProcessor {
                         config.inputPath,
                         config.outputPath,
                         "PASSTHROUGH",
-                        containerLabel(config.outputMode),
-                        config.preset.value(),
+                        containerLabel(outputMode),
+                        presetValue,
                         safeLength(inputFile),
                         safeLength(outputFile),
                         "Debug passthrough failed: " + e.getMessage()
@@ -386,8 +396,8 @@ public class SurroundProcessor {
                 config.inputPath,
                 config.outputPath,
                 "AC3",
-                containerLabel(config.outputMode),
-                config.preset.value(),
+                containerLabel(outputMode),
+                presetValue,
                 safeLength(inputFile),
                 0,
                 "Surround engine backend not connected yet"
@@ -399,13 +409,17 @@ public class SurroundProcessor {
      * Stereo decode + matrix render + AC3 encode
      */
     protected Result renderToAc3Master(Config config, File inputFile, File ac3OutputFile) {
+        String presetValue = (config != null && config.preset != null)
+                ? config.preset.value()
+                : Preset.BALANCED.value();
+
         return Result.failure(
-                config.trackId,
-                inputFile.getAbsolutePath(),
-                ac3OutputFile.getAbsolutePath(),
+                config != null ? config.trackId : null,
+                inputFile != null ? inputFile.getAbsolutePath() : null,
+                ac3OutputFile != null ? ac3OutputFile.getAbsolutePath() : null,
                 "AC3",
                 "ac3",
-                config.preset.value(),
+                presetValue,
                 safeLength(inputFile),
                 safeLength(ac3OutputFile),
                 "AC3 renderer not implemented yet"
@@ -417,13 +431,17 @@ public class SurroundProcessor {
      * Mux already encoded AC3 into MPEG-TS container
      */
     protected Result muxAc3ToTs(Config config, File ac3InputFile, File tsOutputFile) {
+        String presetValue = (config != null && config.preset != null)
+                ? config.preset.value()
+                : Preset.BALANCED.value();
+
         return Result.failure(
-                config.trackId,
-                ac3InputFile.getAbsolutePath(),
-                tsOutputFile.getAbsolutePath(),
+                config != null ? config.trackId : null,
+                ac3InputFile != null ? ac3InputFile.getAbsolutePath() : null,
+                tsOutputFile != null ? tsOutputFile.getAbsolutePath() : null,
                 "AC3",
                 "ts",
-                config.preset.value(),
+                presetValue,
                 safeLength(ac3InputFile),
                 safeLength(tsOutputFile),
                 "TS muxer not implemented yet"
@@ -447,24 +465,72 @@ public class SurroundProcessor {
      * mode = TS
      * => /music/song_surround_balanced.ts
      */
-    public static String buildOutputPath(
-            String inputPath,
-            String suffix,
-            OutputMode mode
-    ) {
-        return Deezer.buildDerivedOutputPath(
-                inputPath,
-                suffix,
-                defaultExtension(mode)
-        );
+    public static String buildOutputPath(String inputPath, String suffix, OutputMode mode) {
+        return buildDerivedOutputPath(inputPath, suffix, defaultExtension(mode));
     }
 
     public static String buildPresetSuffix(Preset preset) {
-        return "surround_" + preset.value();
+        Preset safePreset = preset != null ? preset : Preset.BALANCED;
+        return "surround_" + safePreset.value();
+    }
+
+    /**
+     * Self-contained replacement for Deezer.buildDerivedOutputPath(...)
+     * so this class can compile independently in release builds.
+     */
+    private static String buildDerivedOutputPath(String inputPath, String suffix, String extension) {
+        if (inputPath == null || inputPath.trim().isEmpty()) {
+            String safeSuffix = (suffix == null || suffix.trim().isEmpty()) ? "output" : suffix.trim();
+            String safeExt = normalizeExtension(extension);
+            return safeSuffix + "." + safeExt;
+        }
+
+        File inputFile = new File(inputPath);
+        String parent = inputFile.getParent();
+        String name = inputFile.getName();
+
+        String baseName = stripLastExtension(name);
+        String safeSuffix = (suffix == null || suffix.trim().isEmpty()) ? "output" : suffix.trim();
+        String safeExt = normalizeExtension(extension);
+
+        String outputName = baseName + "_" + safeSuffix + "." + safeExt;
+
+        if (parent == null || parent.trim().isEmpty()) {
+            return outputName;
+        }
+        return new File(parent, outputName).getPath();
+    }
+
+    private static String stripLastExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return "output";
+        }
+
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot <= 0) {
+            return fileName;
+        }
+        return fileName.substring(0, lastDot);
+    }
+
+    private static String normalizeExtension(String extension) {
+        if (extension == null || extension.trim().isEmpty()) {
+            return "ts";
+        }
+
+        String ext = extension.trim();
+        while (ext.startsWith(".")) {
+            ext = ext.substring(1);
+        }
+
+        if (ext.isEmpty()) {
+            return "ts";
+        }
+        return ext;
     }
 
     private static boolean ensureParentDirectory(File outputFile) {
-        File parent = outputFile.getParentFile();
+        File parent = outputFile != null ? outputFile.getParentFile() : null;
         if (parent == null) return true;
         if (parent.exists()) return true;
         return parent.mkdirs();
