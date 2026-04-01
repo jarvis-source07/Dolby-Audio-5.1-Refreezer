@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
@@ -61,6 +62,8 @@ public class DownloadService extends Service {
     static final String NOTIFICATION_CHANNEL_ID = "refreezerdownloads";
     static final int NOTIFICATION_ID_START = 6969;
 
+    private static final String TAG_SURROUND = "SURROUND";
+
     boolean running = false;
     DownloadSettings settings;
     Context context;
@@ -75,7 +78,16 @@ public class DownloadService extends Service {
     ArrayList<DownloadThread> threads = new ArrayList<>();
     ArrayList<Boolean> updateRequests = new ArrayList<>();
     boolean updating = false;
-    Handler progressUpdateHandler = new Handler();
+
+    Handler progressUpdateHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressUpdateRunnable = new Runnable() {
+        @Override
+        public void run() {
+            updateProgress();
+            progressUpdateHandler.postDelayed(this, 500);
+        }
+    };
+
     DownloadLog logger = new DownloadLog();
 
     public DownloadService() {
@@ -105,14 +117,21 @@ public class DownloadService extends Service {
 
     @Override
     public void onDestroy() {
+        progressUpdateHandler.removeCallbacksAndMessages(null);
         notificationManager.cancelAll();
+
+        if (db != null && db.isOpen()) {
+            db.close();
+        }
+        db = null;
+
         logger.close();
         super.onDestroy();
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        serviceMessenger = new Messenger(new IncomingHandler(this));
+        serviceMessenger = new Messenger(new IncomingHandler());
         if (intent != null) {
             activityMessenger = intent.getParcelableExtra("activityMessenger");
         }
@@ -137,46 +156,56 @@ public class DownloadService extends Service {
                     NotificationManager.IMPORTANCE_MIN
             );
             NotificationManager nManager = getSystemService(NotificationManager.class);
-            nManager.createNotificationChannel(channel);
+            if (nManager != null) {
+                nManager.createNotificationChannel(channel);
+            }
         }
     }
 
     private void updateQueue() {
+        if (db == null || !db.isOpen()) return;
+
         db.beginTransaction();
 
-        for (int i = threads.size() - 1; i >= 0; i--) {
-            Download.DownloadState state = threads.get(i).download.state;
-            if (state == Download.DownloadState.NONE ||
-                    state == Download.DownloadState.DONE ||
-                    state == Download.DownloadState.ERROR ||
-                    state == Download.DownloadState.DEEZER_ERROR) {
+        try {
+            for (int i = threads.size() - 1; i >= 0; i--) {
+                Download.DownloadState state = threads.get(i).download.state;
+                if (state == Download.DownloadState.NONE ||
+                        state == Download.DownloadState.DONE ||
+                        state == Download.DownloadState.ERROR ||
+                        state == Download.DownloadState.DEEZER_ERROR) {
 
-                Download d = threads.get(i).download;
+                    Download d = threads.get(i).download;
 
-                for (int j = 0; j < downloads.size(); j++) {
-                    if (downloads.get(j).id == d.id) {
-                        downloads.set(j, d);
+                    for (int j = 0; j < downloads.size(); j++) {
+                        if (downloads.get(j).id == d.id) {
+                            downloads.set(j, d);
+                        }
                     }
+
+                    updateProgress();
+
+                    ContentValues row = new ContentValues();
+                    row.put("state", state.getValue());
+                    row.put("quality", d.quality);
+                    db.update("Downloads", row, "id == ?", new String[]{Integer.toString(d.id)});
+
+                    if (state == Download.DownloadState.DONE && !d.priv) {
+                        File file = threads.get(i).outFile;
+                        if (file != null) {
+                            Uri uri = Uri.fromFile(new File(file.getPath()));
+                            sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri));
+                        }
+                    }
+
+                    threads.remove(i);
                 }
-
-                updateProgress();
-
-                ContentValues row = new ContentValues();
-                row.put("state", state.getValue());
-                row.put("quality", d.quality);
-                db.update("Downloads", row, "id == ?", new String[]{Integer.toString(d.id)});
-
-                if (state == Download.DownloadState.DONE && !d.priv) {
-                    Uri uri = Uri.fromFile(new File(threads.get(i).outFile.getPath()));
-                    sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri));
-                }
-
-                threads.remove(i);
             }
-        }
 
-        db.setTransactionSuccessful();
-        db.endTransaction();
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
 
         if (running) {
             int nThreads = settings != null ? settings.downloadThreads - threads.size() : 0;
@@ -234,6 +263,8 @@ public class DownloadService extends Service {
     }
 
     private void loadDownloads() {
+        if (db == null || !db.isOpen()) return;
+
         Cursor cursor = db.query("Downloads", null, null, null, null, null, null);
 
         while (cursor.moveToNext()) {
@@ -370,6 +401,7 @@ public class DownloadService extends Service {
 
             if (outFile.exists()) {
                 if (settings != null && settings.overwriteDownload) {
+                    //noinspection ResultOfMethodCallIgnored
                     outFile.delete();
                 } else {
                     download.state = Download.DownloadState.DONE;
@@ -446,6 +478,7 @@ public class DownloadService extends Service {
                     File decFile = new File(tmpFile.getPath() + ".DEC");
                     DeezerDecryptor decryptor = new DeezerDecryptor(download.streamTrackId);
                     decryptor.decryptFile(tmpFile.getPath(), decFile.getPath());
+                    //noinspection ResultOfMethodCallIgnored
                     tmpFile.delete();
                     tmpFile = decFile;
                 } catch (Exception e) {
@@ -477,10 +510,13 @@ public class DownloadService extends Service {
                     inputStream.close();
                     outputStream.close();
 
+                    //noinspection ResultOfMethodCallIgnored
                     tmpFile.delete();
                 } catch (Exception e) {
                     try {
+                        //noinspection ResultOfMethodCallIgnored
                         outFile.delete();
+                        //noinspection ResultOfMethodCallIgnored
                         tmpFile.delete();
                     } catch (Exception ignored) {
                     }
@@ -598,6 +634,7 @@ public class DownloadService extends Service {
                 }
 
                 if (!settings.trackCover) {
+                    //noinspection ResultOfMethodCallIgnored
                     coverFile.delete();
                 }
 
@@ -611,7 +648,7 @@ public class DownloadService extends Service {
                 maybeGenerateSurroundArtifact(download, outFile);
             } catch (Throwable t) {
                 logger.warn("Surround generation throwable: " + t, download);
-                Log.e("SURROUND", "Surround generation throwable", t);
+                Log.e(TAG_SURROUND, "Surround generation throwable", t);
             } finally {
                 download.state = Download.DownloadState.DONE;
                 updateQueueWrapper();
@@ -664,6 +701,7 @@ public class DownloadService extends Service {
                 }
             } catch (Exception e) {
                 logger.warn("Error downloading album cover! " + e, download);
+                //noinspection ResultOfMethodCallIgnored
                 coverFile.delete();
             }
         }
@@ -688,45 +726,52 @@ public class DownloadService extends Service {
      */
     private void maybeGenerateSurroundArtifact(Download download, File sourceFile) {
         try {
-            Log.i("SURROUND", "maybeGenerateSurroundArtifact called");
+            Log.i(TAG_SURROUND, "maybeGenerateSurroundArtifact called");
 
             if (settings == null) {
-                Log.w("SURROUND", "Skipping surround generation: settings == null");
+                Log.w(TAG_SURROUND, "Skipping surround generation: settings == null");
+                return;
+            }
+
+            if (!settings.isSurroundEnabled()) {
+                Log.i(TAG_SURROUND, "Skipping surround generation: playbackMode is not surround");
                 return;
             }
 
             if (download == null || download.trackId == null || download.trackId.trim().isEmpty()) {
-                Log.w("SURROUND", "Skipping surround generation: invalid download/trackId");
+                Log.w(TAG_SURROUND, "Skipping surround generation: invalid download/trackId");
                 return;
             }
 
             if (sourceFile == null || !sourceFile.exists() || !sourceFile.isFile()) {
                 logger.warn("Skipping surround generation, source file missing", download);
-                Log.w("SURROUND", "Skipping surround generation: source missing");
+                Log.w(TAG_SURROUND, "Skipping surround generation: source missing");
                 return;
             }
 
             String ffmpegPath = resolveFfmpegBinaryPath();
             if (ffmpegPath == null || ffmpegPath.trim().isEmpty()) {
                 logger.warn("Skipping surround generation, ffmpeg path unavailable", download);
-                Log.w("SURROUND", "Skipping surround generation: ffmpeg path unavailable");
+                Log.w(TAG_SURROUND, "Skipping surround generation: ffmpeg path unavailable");
                 return;
             }
+
+            String presetKey = settings.normalizedSurroundPreset();
 
             File surroundOutput = getSurroundOutputFile(download.trackId, true, "ac3");
             if (surroundOutput == null) {
                 logger.warn("Skipping surround generation, surround output path unavailable", download);
-                Log.w("SURROUND", "Skipping surround generation: output path unavailable");
+                Log.w(TAG_SURROUND, "Skipping surround generation: output path unavailable");
                 return;
             }
 
             Log.i(
-                    "SURROUND",
+                    TAG_SURROUND,
                     "Generating AC3 surround for trackId=" + download.trackId
                             + ", source=" + sourceFile.getAbsolutePath()
                             + ", sourceSize=" + sourceFile.length()
                             + ", out=" + surroundOutput.getAbsolutePath()
-                            + ", preset=" + settings.surroundPreset
+                            + ", preset=" + presetKey
                             + ", playbackMode=" + settings.playbackMode
             );
 
@@ -741,9 +786,7 @@ public class DownloadService extends Service {
                                     .setInputPath(sourceFile.getAbsolutePath())
                                     .setOutputPath(surroundOutput.getAbsolutePath())
                                     .setOutputMode(SurroundProcessor.OutputMode.AC3)
-                                    .setPreset(
-                                            SurroundProcessor.Preset.fromString(settings.surroundPreset)
-                                    )
+                                    .setPreset(SurroundProcessor.Preset.fromString(presetKey))
                                     .setOverwrite(true)
                                     .setDebugPassthrough(false)
                                     .setBitrateKbps(448)
@@ -755,7 +798,7 @@ public class DownloadService extends Service {
             boolean fileOk = surroundOutput.exists() && surroundOutput.length() > 0;
 
             Log.i(
-                    "SURROUND",
+                    TAG_SURROUND,
                     "AC3 surround result trackId=" + download.trackId
                             + ", success=" + result.success
                             + ", fileOk=" + fileOk
@@ -777,7 +820,7 @@ public class DownloadService extends Service {
             }
         } catch (Throwable t) {
             logger.warn("Unexpected surround generation throwable: " + t, download);
-            Log.e("SURROUND", "Unexpected surround generation throwable", t);
+            Log.e(TAG_SURROUND, "Unexpected surround generation throwable", t);
         }
     }
 
@@ -787,10 +830,8 @@ public class DownloadService extends Service {
     }
 
     private void createProgressUpdateHandler() {
-        progressUpdateHandler.postDelayed(() -> {
-            updateProgress();
-            createProgressUpdateHandler();
-        }, 500);
+        progressUpdateHandler.removeCallbacksAndMessages(null);
+        progressUpdateHandler.postDelayed(progressUpdateRunnable, 500);
     }
 
     private void updateProgress() {
@@ -873,12 +914,12 @@ public class DownloadService extends Service {
     }
 
     class IncomingHandler extends Handler {
-        IncomingHandler(Context context) {
-            context.getApplicationContext();
+        IncomingHandler() {
+            super(Looper.getMainLooper());
         }
 
         @Override
-        public void handleMessage(Message msg) {
+        public void handleMessage(@NonNull Message msg) {
             switch (msg.what) {
                 case SERVICE_LOAD_DOWNLOADS:
                     loadDownloads();
@@ -900,9 +941,10 @@ public class DownloadService extends Service {
                         deezer.contentLanguage = settings.deezerLanguage;
 
                         Log.i(
-                                "SURROUND",
+                                TAG_SURROUND,
                                 "Settings update: playbackMode=" + settings.playbackMode
                                         + ", surroundPreset=" + settings.surroundPreset
+                                        + ", normalizedSurroundPreset=" + settings.normalizedSurroundPreset()
                                         + ", downloadThreads=" + settings.downloadThreads
                         );
                     }
@@ -925,31 +967,41 @@ public class DownloadService extends Service {
                             break;
                         }
                     }
-                    db.delete("Downloads", "id == ?", new String[]{Integer.toString(downloadId)});
+                    if (db != null && db.isOpen()) {
+                        db.delete("Downloads", "id == ?", new String[]{Integer.toString(downloadId)});
+                    }
                     updateState();
                     break;
 
                 case SERVICE_RETRY_DOWNLOADS:
-                    db.beginTransaction();
-                    for (int i = 0; i < downloads.size(); i++) {
-                        Download d = downloads.get(i);
-                        if (d.state == Download.DownloadState.DEEZER_ERROR ||
-                                d.state == Download.DownloadState.ERROR) {
-                            d.state = Download.DownloadState.NONE;
-                            downloads.set(i, d);
-
-                            ContentValues values = new ContentValues();
-                            values.put("state", 0);
-                            db.update(
-                                    "Downloads",
-                                    values,
-                                    "id == ?",
-                                    new String[]{Integer.toString(d.id)}
-                            );
-                        }
+                    if (db == null || !db.isOpen()) {
+                        updateState();
+                        break;
                     }
-                    db.setTransactionSuccessful();
-                    db.endTransaction();
+
+                    db.beginTransaction();
+                    try {
+                        for (int i = 0; i < downloads.size(); i++) {
+                            Download d = downloads.get(i);
+                            if (d.state == Download.DownloadState.DEEZER_ERROR ||
+                                    d.state == Download.DownloadState.ERROR) {
+                                d.state = Download.DownloadState.NONE;
+                                downloads.set(i, d);
+
+                                ContentValues values = new ContentValues();
+                                values.put("state", 0);
+                                db.update(
+                                        "Downloads",
+                                        values,
+                                        "id == ?",
+                                        new String[]{Integer.toString(d.id)}
+                                );
+                            }
+                        }
+                        db.setTransactionSuccessful();
+                    } finally {
+                        db.endTransaction();
+                    }
                     updateState();
                     break;
 
@@ -962,29 +1014,37 @@ public class DownloadService extends Service {
                         return;
                     }
 
-                    db.beginTransaction();
-                    int i = (downloads.size() - 1);
-                    while (i >= 0) {
-                        Download d = downloads.get(i);
-                        if (d.state == state) {
-                            db.delete(
-                                    "Downloads",
-                                    "id == ?",
-                                    new String[]{Integer.toString(d.id)}
-                            );
-                            downloads.remove(i);
-                        }
-                        i--;
+                    if (db == null || !db.isOpen()) {
+                        updateState();
+                        break;
                     }
 
-                    db.delete(
-                            "Downloads",
-                            "state == ?",
-                            new String[]{Integer.toString(msg.getData().getInt("state"))}
-                    );
+                    db.beginTransaction();
+                    try {
+                        int i = (downloads.size() - 1);
+                        while (i >= 0) {
+                            Download d = downloads.get(i);
+                            if (d.state == state) {
+                                db.delete(
+                                        "Downloads",
+                                        "id == ?",
+                                        new String[]{Integer.toString(d.id)}
+                                );
+                                downloads.remove(i);
+                            }
+                            i--;
+                        }
 
-                    db.setTransactionSuccessful();
-                    db.endTransaction();
+                        db.delete(
+                                "Downloads",
+                                "state == ?",
+                                new String[]{Integer.toString(msg.getData().getInt("state"))}
+                        );
+
+                        db.setTransactionSuccessful();
+                    } finally {
+                        db.endTransaction();
+                    }
                     updateState();
                     break;
 
@@ -994,10 +1054,10 @@ public class DownloadService extends Service {
         }
     }
 
-    void sendMessage(int type, Bundle data) {
+    void sendMessage(int type, @Nullable Bundle data) {
         if (activityMessenger != null) {
             Message msg = Message.obtain(null, type);
-            msg.setData(data);
+            msg.setData(data != null ? data : new Bundle());
             try {
                 activityMessenger.send(msg);
             } catch (RemoteException e) {
@@ -1026,7 +1086,7 @@ public class DownloadService extends Service {
             }
             return appFlutterDir;
         } catch (Exception e) {
-            Log.e("SURROUND", "Failed to resolve app_flutter dir", e);
+            Log.e(TAG_SURROUND, "Failed to resolve app_flutter dir", e);
             return null;
         }
     }
@@ -1045,7 +1105,7 @@ public class DownloadService extends Service {
 
             return surroundDir;
         } catch (Exception e) {
-            Log.e("SURROUND", "Failed to get surround directory", e);
+            Log.e(TAG_SURROUND, "Failed to get surround directory", e);
             return null;
         }
     }
@@ -1087,7 +1147,7 @@ public class DownloadService extends Service {
                 file.delete();
             }
         } catch (Exception e) {
-            Log.w("SURROUND", "Failed deleting surround artifact " + extension, e);
+            Log.w(TAG_SURROUND, "Failed deleting surround artifact " + extension, e);
         }
     }
 
@@ -1142,15 +1202,66 @@ public class DownloadService extends Service {
             this.deezerLanguage = deezerLanguage;
             this.deezerCountry = deezerCountry;
             this.tags = tags;
-            this.playbackMode = playbackMode;
-            this.surroundPreset = surroundPreset;
+            this.playbackMode = playbackMode == null ? "normal" : playbackMode;
+            this.surroundPreset = normalizeSurroundPreset(surroundPreset);
         }
 
         boolean isSurroundEnabled() {
             return "surround".equalsIgnoreCase(playbackMode);
         }
 
+        String normalizedSurroundPreset() {
+            return normalizeSurroundPreset(surroundPreset);
+        }
+
+        static String normalizeSurroundPreset(String value) {
+            if (value == null) return "room_fill_matrix";
+
+            String normalized = value.trim().toLowerCase();
+
+            switch (normalized) {
+                case "raw":
+                case "raw_clone":
+                case "raw-stereo-clone":
+                case "raw stereo clone":
+                case "pure_stereo":
+                case "pure stereo":
+                    return "raw_clone";
+
+                case "room_fill":
+                case "room fill":
+                case "room_fill_matrix":
+                case "room fill matrix":
+                case "natural_matrix":
+                case "natural matrix":
+                case "balanced":
+                    return "room_fill_matrix";
+
+                case "wide":
+                case "wide_stage":
+                case "wide stage":
+                    return "wide_stage";
+
+                case "vocal_anchor":
+                case "vocal anchor":
+                case "vocal_focus":
+                case "vocal focus":
+                    return "vocal_anchor";
+
+                case "immersive":
+                case "immersive_music":
+                case "immersive music":
+                case "cinematic":
+                    return "immersive_music";
+
+                default:
+                    return "room_fill_matrix";
+            }
+        }
+
         static DownloadSettings fromBundle(Bundle b) {
+            if (b == null) return null;
+
             JSONObject json;
             try {
                 json = new JSONObject(b.getString("json"));

@@ -40,6 +40,8 @@ class Settings {
   late PlaybackMode playbackMode;
 
   // Surround preset
+  // Keep annotation unchanged to avoid requiring build_runner regeneration.
+  // Default is normalized at runtime.
   @JsonKey(defaultValue: 'balanced')
   late String surroundPreset;
 
@@ -221,6 +223,98 @@ class Settings {
     return AppIconChanger.availableIcons.map((icon) => icon.key).toList();
   }
 
+  // ----------------------------
+  // Surround preset helpers
+  // ----------------------------
+
+  static const List<String> supportedSurroundPresets = [
+    'raw_clone',
+    'room_fill_matrix',
+    'wide_stage',
+    'vocal_anchor',
+    'immersive_music',
+  ];
+
+  static String normalizeSurroundPreset(String? value) {
+    final v = (value ?? '').trim().toLowerCase();
+
+    switch (v) {
+      case 'raw':
+      case 'raw_clone':
+      case 'raw-stereo-clone':
+      case 'raw stereo clone':
+      case 'pure_stereo':
+      case 'pure stereo':
+        return 'raw_clone';
+
+      case 'balanced':
+      case 'room_fill':
+      case 'room fill':
+      case 'room_fill_matrix':
+      case 'room fill matrix':
+      case 'natural_matrix':
+      case 'natural matrix':
+        return 'room_fill_matrix';
+
+      case 'wide':
+      case 'wide_stage':
+      case 'wide stage':
+        return 'wide_stage';
+
+      case 'vocal_anchor':
+      case 'vocal anchor':
+      case 'vocal_focus':
+      case 'vocal focus':
+        return 'vocal_anchor';
+
+      case 'cinematic':
+      case 'immersive':
+      case 'immersive_music':
+      case 'immersive music':
+        return 'immersive_music';
+
+      default:
+        return 'room_fill_matrix';
+    }
+  }
+
+  List<String> get availableSurroundPresets => supportedSurroundPresets;
+
+  String get normalizedSurroundPreset =>
+      Settings.normalizeSurroundPreset(surroundPreset);
+
+  String get surroundPresetDisplayName {
+    switch (normalizedSurroundPreset) {
+      case 'raw_clone':
+        return 'Pure Stereo';
+      case 'wide_stage':
+        return 'Wide Stage';
+      case 'vocal_anchor':
+        return 'Vocal Focus';
+      case 'immersive_music':
+        return 'Immersive';
+      case 'room_fill_matrix':
+      default:
+        return 'Room Fill';
+    }
+  }
+
+  String surroundPresetLabelFor(String preset) {
+    switch (Settings.normalizeSurroundPreset(preset)) {
+      case 'raw_clone':
+        return 'Pure Stereo';
+      case 'wide_stage':
+        return 'Wide Stage';
+      case 'vocal_anchor':
+        return 'Vocal Focus';
+      case 'immersive_music':
+        return 'Immersive';
+      case 'room_fill_matrix':
+      default:
+        return 'Room Fill';
+    }
+  }
+
   // JSON to forward into download service
   Map<String, dynamic> getServiceSettings() {
     return {'json': jsonEncode(toJson())};
@@ -274,10 +368,16 @@ class Settings {
 
     if (await f.exists()) {
       final String data = await f.readAsString();
-      return Settings.fromJson(jsonDecode(data));
+      final Settings loaded = Settings.fromJson(jsonDecode(data));
+      loaded.surroundPreset =
+          Settings.normalizeSurroundPreset(loaded.surroundPreset);
+      return loaded;
     }
 
     final Settings s = Settings.fromJson({});
+
+    // Normalize surround preset so legacy/generated defaults don't matter.
+    s.surroundPreset = Settings.normalizeSurroundPreset(s.surroundPreset);
 
     // Set default path, because async
     s.downloadPath = await ExternalPath.getExternalStoragePublicDirectory(
@@ -294,6 +394,8 @@ class Settings {
   }
 
   Future<void> save({bool updateDownloadService = true}) async {
+    surroundPreset = Settings.normalizeSurroundPreset(surroundPreset);
+
     await _writeToDisk();
 
     if (updateDownloadService) {
@@ -332,7 +434,7 @@ class Settings {
   }
 
   Future<void> setSurroundPreset(String preset) async {
-    surroundPreset = preset;
+    surroundPreset = Settings.normalizeSurroundPreset(preset);
     await save();
 
     if (!isSurroundMode) return;

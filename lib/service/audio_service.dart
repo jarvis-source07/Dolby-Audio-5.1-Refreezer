@@ -1153,8 +1153,11 @@ class AudioPlayerHandler extends BaseAudioHandler
     String outputMode = 'ac3',
   }) async {
     try {
+      final String presetKey = settings.normalizedSurroundPreset;
+
       Logger.root.info(
-        'No surround artifact found for ${mediaItem.id}, generating now from input: $inputPath (outputMode=$outputMode)',
+        'No surround artifact found for ${mediaItem.id}, generating now '
+        'from input: $inputPath (outputMode=$outputMode, preset=$presetKey)',
       );
 
       final dynamic raw = await _nativeChannel.invokeMethod(
@@ -1163,7 +1166,7 @@ class AudioPlayerHandler extends BaseAudioHandler
           'trackId': mediaItem.id,
           'inputPath': inputPath,
           'outputMode': outputMode,
-          'preset': settings.surroundPreset,
+          'preset': presetKey,
           'overwrite': true,
           'persistent': true,
           'debugPassthrough': false,
@@ -1382,7 +1385,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   }
 
   void _playbackError(err) {
-    Logger.root.severe('Playback Error from audioservice: ${err.code}', err);
+    final String code =
+        err is PlatformException ? (err.code) : err.runtimeType.toString();
+    Logger.root.severe('Playback Error from audioservice: $code', err);
     if (err is PlatformException &&
         err.code == 'abort' &&
         err.message == 'Connection aborted') {
@@ -1392,7 +1397,9 @@ class AudioPlayerHandler extends BaseAudioHandler
   }
 
   void _onError(err, stacktrace, {bool stopService = false}) {
-    Logger.root.severe('Error from audioservice: ${err.code}', err);
+    final String code =
+        err is PlatformException ? (err.code) : err.runtimeType.toString();
+    Logger.root.severe('Error from audioservice: $code', err);
     if (stopService) stop();
   }
 

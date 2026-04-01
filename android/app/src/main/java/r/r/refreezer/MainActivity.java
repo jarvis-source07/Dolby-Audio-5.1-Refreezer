@@ -34,6 +34,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Locale;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
@@ -98,48 +99,56 @@ public class MainActivity extends AudioServiceActivity {
         new MethodChannel(
                 flutterEngine.getDartExecutor().getBinaryMessenger(),
                 CHANNEL
-        ).setMethodCallHandler(((call, result) -> {
+        ).setMethodCallHandler((call, result) -> {
 
             if (call.method.equals("addDownloads")) {
                 ArrayList<HashMap<?, ?>> downloads = call.arguments();
 
                 if (downloads != null) {
-                    db.beginTransaction();
-                    for (int i = 0; i < downloads.size(); i++) {
-                        Cursor cursor = db.rawQuery(
-                                "SELECT id, state, quality FROM Downloads WHERE trackId == ? AND path == ?",
-                                new String[]{
-                                        (String) downloads.get(i).get("trackId"),
-                                        (String) downloads.get(i).get("path")
-                                }
-                        );
+                    if (db == null || !db.isOpen()) {
+                        result.error("db_unavailable", "Downloads database is not available", null);
+                        return;
+                    }
 
-                        if (cursor.getCount() > 0) {
-                            cursor.moveToNext();
-                            if (cursor.getInt(1) >= 3) {
-                                ContentValues values = new ContentValues();
-                                values.put("state", 0);
-                                values.put("quality", cursor.getInt(2));
-                                db.update(
-                                        "Downloads",
-                                        values,
-                                        "id == ?",
-                                        new String[]{Integer.toString(cursor.getInt(0))}
-                                );
-                                Log.d("INFO", "Already exists in DB, updating to none state!");
-                            } else {
-                                Log.d("INFO", "Already exists in DB!");
+                    db.beginTransaction();
+                    try {
+                        for (int i = 0; i < downloads.size(); i++) {
+                            Cursor cursor = db.rawQuery(
+                                    "SELECT id, state, quality FROM Downloads WHERE trackId == ? AND path == ?",
+                                    new String[]{
+                                            (String) downloads.get(i).get("trackId"),
+                                            (String) downloads.get(i).get("path")
+                                    }
+                            );
+
+                            if (cursor.getCount() > 0) {
+                                cursor.moveToNext();
+                                if (cursor.getInt(1) >= 3) {
+                                    ContentValues values = new ContentValues();
+                                    values.put("state", 0);
+                                    values.put("quality", cursor.getInt(2));
+                                    db.update(
+                                            "Downloads",
+                                            values,
+                                            "id == ?",
+                                            new String[]{Integer.toString(cursor.getInt(0))}
+                                    );
+                                    Log.d("INFO", "Already exists in DB, updating to none state!");
+                                } else {
+                                    Log.d("INFO", "Already exists in DB!");
+                                }
+                                cursor.close();
+                                continue;
                             }
                             cursor.close();
-                            continue;
-                        }
-                        cursor.close();
 
-                        ContentValues row = Download.flutterToSQL(downloads.get(i));
-                        db.insert("Downloads", null, row);
+                            ContentValues row = Download.flutterToSQL(downloads.get(i));
+                            db.insert("Downloads", null, row);
+                        }
+                        db.setTransactionSuccessful();
+                    } finally {
+                        db.endTransaction();
                     }
-                    db.setTransactionSuccessful();
-                    db.endTransaction();
 
                     sendMessageOrQueue(DownloadService.SERVICE_LOAD_DOWNLOADS, null);
 
@@ -149,6 +158,11 @@ public class MainActivity extends AudioServiceActivity {
             }
 
             if (call.method.equals("getDownloads")) {
+                if (db == null || !db.isOpen()) {
+                    result.error("db_unavailable", "Downloads database is not available", null);
+                    return;
+                }
+
                 Cursor cursor = db.query("Downloads", null, null, null, null, null, null);
                 ArrayList<HashMap<?, ?>> downloads = new ArrayList<>();
 
@@ -164,7 +178,8 @@ public class MainActivity extends AudioServiceActivity {
 
             if (call.method.equals("updateSettings")) {
                 Bundle bundle = new Bundle();
-                bundle.putString("json", call.argument("json").toString());
+                Object jsonArg = call.argument("json");
+                bundle.putString("json", jsonArg != null ? jsonArg.toString() : "{}");
                 sendMessageOrQueue(DownloadService.SERVICE_SETTINGS_UPDATE, bundle);
 
                 result.success(null);
@@ -191,7 +206,8 @@ public class MainActivity extends AudioServiceActivity {
 
             if (call.method.equals("removeDownload")) {
                 Bundle bundle = new Bundle();
-                bundle.putInt("id", (int) call.argument("id"));
+                Integer id = call.argument("id");
+                bundle.putInt("id", id != null ? id : -1);
                 sendMessageOrQueue(DownloadService.SERVICE_REMOVE_DOWNLOAD, bundle);
                 result.success(null);
                 return;
@@ -205,7 +221,8 @@ public class MainActivity extends AudioServiceActivity {
 
             if (call.method.equals("removeDownloads")) {
                 Bundle bundle = new Bundle();
-                bundle.putInt("state", (int) call.argument("state"));
+                Integer state = call.argument("state");
+                bundle.putInt("state", state != null ? state : -1);
                 sendMessageOrQueue(DownloadService.SERVICE_REMOVE_DOWNLOADS, bundle);
                 result.success(null);
                 return;
@@ -224,8 +241,14 @@ public class MainActivity extends AudioServiceActivity {
 
             if (call.method.equals("startServer")) {
                 if (streamServer == null) {
-                    String offlinePath = getExternalFilesDir("offline").getAbsolutePath();
-                    streamServer = new StreamServer(call.argument("arl"), offlinePath);
+                    File offlineDir = getExternalFilesDir("offline");
+                    if (offlineDir == null) {
+                        result.error("storage_unavailable", "External files directory is not available", null);
+                        return;
+                    }
+
+                    String arl = call.argument("arl");
+                    streamServer = new StreamServer(arl, offlineDir.getAbsolutePath());
                     streamServer.start();
                 }
                 result.success(null);
@@ -238,8 +261,14 @@ public class MainActivity extends AudioServiceActivity {
                     return;
                 }
 
+                Object idArg = call.argument("id");
+                if (idArg == null) {
+                    result.success(null);
+                    return;
+                }
+
                 StreamServer.StreamInfo info =
-                        streamServer.streams.get(call.argument("id").toString());
+                        streamServer.streams.get(idArg.toString());
 
                 if (info != null) {
                     result.success(info.toJSON());
@@ -436,11 +465,14 @@ public class MainActivity extends AudioServiceActivity {
                     } catch (Throwable t) {
                         Log.e(TAG_SURROUND, "generateSurroundNow failed", t);
                         final HashMap<String, Object> out = errorMap(
-                                "generateSurroundNow throwable: " + t.getClass().getName() + ": " + t.getMessage()
+                                "generateSurroundNow throwable: "
+                                        + t.getClass().getName()
+                                        + ": "
+                                        + t.getMessage()
                         );
                         mainHandler.post(() -> result.success(out));
                     }
-                }).start();
+                }, "GenerateSurroundNowThread").start();
 
                 return;
             }
@@ -524,13 +556,13 @@ public class MainActivity extends AudioServiceActivity {
             }
 
             result.error("0", "Not implemented!", "Not implemented!");
-        }));
+        });
 
         EventChannel eventChannel = new EventChannel(
                 flutterEngine.getDartExecutor().getBinaryMessenger(),
                 EVENT_CHANNEL
         );
-        eventChannel.setStreamHandler((new EventChannel.StreamHandler() {
+        eventChannel.setStreamHandler(new EventChannel.StreamHandler() {
             @Override
             public void onListen(Object arguments, EventChannel.EventSink events) {
                 eventSink = events;
@@ -540,7 +572,7 @@ public class MainActivity extends AudioServiceActivity {
             public void onCancel(Object arguments) {
                 eventSink = null;
             }
-        }));
+        });
     }
 
     private void connectService() {
@@ -560,18 +592,23 @@ public class MainActivity extends AudioServiceActivity {
 
         connectService();
 
-        DownloadsDatabase dbHelper = new DownloadsDatabase(getApplicationContext());
-        db = dbHelper.getWritableDatabase();
+        if (db == null || !db.isOpen()) {
+            DownloadsDatabase dbHelper = new DownloadsDatabase(getApplicationContext());
+            db = dbHelper.getWritableDatabase();
+        }
 
         TrustManager[] trustAllCerts = new TrustManager[]{
                 new X509TrustManager() {
+                    @Override
                     public java.security.cert.X509Certificate[] getAcceptedIssuers() {
                         return null;
                     }
 
+                    @Override
                     public void checkClientTrusted(X509Certificate[] certs, String authType) {
                     }
 
+                    @Override
                     public void checkServerTrusted(X509Certificate[] certs, String authType) {
                     }
                 }
@@ -583,7 +620,10 @@ public class MainActivity extends AudioServiceActivity {
             sc.init(null, trustAllCerts, new java.security.SecureRandom());
             HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            Log.e(this.getLocalClassName(), e.getMessage() == null ? "SSL init failed" : e.getMessage());
+            Log.e(
+                    this.getLocalClassName(),
+                    e.getMessage() == null ? "SSL init failed" : e.getMessage()
+            );
         }
     }
 
@@ -599,6 +639,7 @@ public class MainActivity extends AudioServiceActivity {
         if (db != null && db.isOpen()) {
             db.close();
         }
+        db = null;
     }
 
     @Override
@@ -607,9 +648,15 @@ public class MainActivity extends AudioServiceActivity {
 
         if (streamServer != null) {
             streamServer.stop();
+            streamServer = null;
         }
 
         stopNativeAc3();
+
+        if (db != null && db.isOpen()) {
+            db.close();
+        }
+        db = null;
 
         if (serviceBound) {
             unbindService(connection);
@@ -692,14 +739,14 @@ public class MainActivity extends AudioServiceActivity {
         }
     }
 
-    void sendMessage(int type, Bundle data) {
+    void sendMessage(int type, @Nullable Bundle data) {
         if (serviceBound && serviceMessenger != null) {
             Message msg = Message.obtain(null, type);
-            msg.setData(data);
+            msg.setData(data != null ? data : new Bundle());
             try {
                 serviceMessenger.send(msg);
             } catch (RemoteException e) {
-                e.printStackTrace();
+                Log.e("DD", "Failed to send message to service", e);
             }
         }
     }
@@ -789,10 +836,16 @@ public class MainActivity extends AudioServiceActivity {
         }
     }
 
+    @NonNull
+    private String normalizeExtension(@Nullable String extension) {
+        String safe = extension == null ? "" : extension.trim().toLowerCase(Locale.US);
+        return safe.isEmpty() ? "ac3" : safe;
+    }
+
     @Nullable
     private File buildSurroundFile(
             @Nullable String trackId,
-            @NonNull String extension,
+            @Nullable String extension,
             boolean persistent,
             boolean external
     ) {
@@ -801,25 +854,27 @@ public class MainActivity extends AudioServiceActivity {
         File dir = getSurroundDirectory(persistent, external);
         if (dir == null) return null;
 
-        String safeExtension = extension.trim().isEmpty() ? "ac3" : extension.trim();
+        String safeExtension = normalizeExtension(extension);
         return new File(dir, trackId + "." + safeExtension);
     }
 
     @Nullable
-    private String findExistingSurroundPath(@Nullable String trackId, @NonNull String extension) {
+    private String findExistingSurroundPath(@Nullable String trackId, @Nullable String extension) {
         if (trackId == null || trackId.trim().isEmpty()) return null;
 
-        File tempFile = buildSurroundFile(trackId, extension, false, false);
+        String ext = normalizeExtension(extension);
+
+        File tempFile = buildSurroundFile(trackId, ext, false, false);
         if (tempFile != null && tempFile.exists() && tempFile.isFile() && tempFile.length() > 0) {
             return tempFile.getAbsolutePath();
         }
 
-        File docsFile = buildSurroundFile(trackId, extension, true, false);
+        File docsFile = buildSurroundFile(trackId, ext, true, false);
         if (docsFile != null && docsFile.exists() && docsFile.isFile() && docsFile.length() > 0) {
             return docsFile.getAbsolutePath();
         }
 
-        File externalFile = buildSurroundFile(trackId, extension, false, true);
+        File externalFile = buildSurroundFile(trackId, ext, false, true);
         if (externalFile != null && externalFile.exists() && externalFile.isFile() && externalFile.length() > 0) {
             return externalFile.getAbsolutePath();
         }
@@ -842,22 +897,23 @@ public class MainActivity extends AudioServiceActivity {
         return findExistingSurroundPath(trackId, "ts");
     }
 
-    private boolean deleteSurroundFilesForTrack(@Nullable String trackId, @NonNull String extension) {
+    private boolean deleteSurroundFilesForTrack(@Nullable String trackId, @Nullable String extension) {
         if (trackId == null || trackId.trim().isEmpty()) return false;
 
+        String ext = normalizeExtension(extension);
         boolean deletedAny = false;
 
-        File tempFile = buildSurroundFile(trackId, extension, false, false);
+        File tempFile = buildSurroundFile(trackId, ext, false, false);
         if (tempFile != null && tempFile.exists()) {
             deletedAny = tempFile.delete() || deletedAny;
         }
 
-        File docsFile = buildSurroundFile(trackId, extension, true, false);
+        File docsFile = buildSurroundFile(trackId, ext, true, false);
         if (docsFile != null && docsFile.exists()) {
             deletedAny = docsFile.delete() || deletedAny;
         }
 
-        File externalFile = buildSurroundFile(trackId, extension, false, true);
+        File externalFile = buildSurroundFile(trackId, ext, false, true);
         if (externalFile != null && externalFile.exists()) {
             deletedAny = externalFile.delete() || deletedAny;
         }
@@ -919,6 +975,8 @@ public class MainActivity extends AudioServiceActivity {
 
     @Nullable
     private String resolveFfmpegBinaryPath() {
+        // FFmpegSurroundProcessor internally routes to ffmpeg-kit,
+        // so this symbolic value is enough for the current architecture.
         return "ffmpeg-kit";
     }
 

@@ -406,7 +406,7 @@ class _IconSelectorState extends State<IconSelector> {
           child: Text(
             'Selecting a new icon will exit the app to apply the change!'
                 .i18n, // Translatable string
-            style: TextStyle(fontWeight: FontWeight.bold),
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
         ...settings.availableIcons.map((String iconKey) {
@@ -786,55 +786,6 @@ class _DeezerSettingsState extends State<DeezerSettings> {
             ),
             leading: const Icon(Icons.history_toggle_off),
           ),
-          //TODO: Reimplement proxy
-//          ListTile(
-//            title: Text('Proxy'.i18n),
-//            leading: Icon(Icons.vpn_key),
-//            subtitle: Text(settings.proxyAddress??'Not set'.i18n),
-//            onTap: () {
-//              String _new;
-//              showDialog(
-//                context: context,
-//                builder: (BuildContext context) {
-//                  return AlertDialog(
-//                    title: Text('Proxy'.i18n),
-//                    content: TextField(
-//                      onChanged: (String v) => _new = v,
-//                      decoration: InputDecoration(
-//                        hintText: 'IP:PORT'
-//                      ),
-//                    ),
-//                    actions: [
-//                      TextButton(
-//                        child: Text('Cancel'.i18n),
-//                        onPressed: () => Navigator.of(context).pop(),
-//                      ),
-//                      TextButton(
-//                        child: Text('Reset'.i18n),
-//                        onPressed: () async {
-//                          setState(() {
-//                            settings.proxyAddress = null;
-//                          });
-//                          await settings.save();
-//                          Navigator.of(context).pop();
-//                        },
-//                      ),
-//                      TextButton(
-//                        child: Text('Save'.i18n),
-//                        onPressed: () async {
-//                          setState(() {
-//                            settings.proxyAddress = _new;
-//                          });
-//                          await settings.save();
-//                          Navigator.of(context).pop();
-//                        },
-//                      )
-//                    ],
-//                  );
-//                }
-//              );
-//            },
-//          )
         ],
       ),
     );
@@ -1263,12 +1214,91 @@ class GeneralSettings extends StatefulWidget {
 }
 
 class _GeneralSettingsState extends State<GeneralSettings> {
+  Widget _buildAudioOutputSection() {
+    return Column(
+      children: [
+        ListTile(
+          title: Text('Audio Output'.i18n),
+          subtitle: Text(
+            settings.playbackMode == PlaybackMode.normal
+                ? 'Normal'.i18n
+                : 'Surround'.i18n,
+          ),
+          leading: const Icon(Icons.surround_sound),
+          trailing: SizedBox(
+            width: 140,
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<PlaybackMode>(
+                isExpanded: true,
+                value: settings.playbackMode,
+                onChanged: (PlaybackMode? mode) async {
+                  if (mode == null) return;
+
+                  await settings.setPlaybackMode(mode);
+
+                  if (!mounted) return;
+                  setState(() {});
+                },
+                items: [
+                  DropdownMenuItem(
+                    value: PlaybackMode.normal,
+                    child: Text('Normal'.i18n),
+                  ),
+                  DropdownMenuItem(
+                    value: PlaybackMode.surround,
+                    child: Text('Surround'.i18n),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (settings.playbackMode == PlaybackMode.surround)
+          ListTile(
+            title: Text('Surround Preset'.i18n),
+            subtitle: Text(settings.surroundPresetDisplayName.i18n),
+            leading: const Icon(Icons.tune),
+            trailing: SizedBox(
+              width: 170,
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  isExpanded: true,
+                  value: settings.normalizedSurroundPreset,
+                  onChanged: (String? preset) async {
+                    if (preset == null) return;
+
+                    await settings.setSurroundPreset(preset);
+
+                    if (!mounted) return;
+                    setState(() {});
+                  },
+                  items: settings.availableSurroundPresets
+                      .map(
+                        (presetKey) => DropdownMenuItem<String>(
+                          value: presetKey,
+                          child: Text(
+                            settings.surroundPresetLabelFor(presetKey).i18n,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: FreezerAppBar('General'.i18n),
       body: ListView(
         children: <Widget>[
+          _buildAudioOutputSection(),
+          const FreezerDivider(),
           ListTile(
             title: Text('Offline mode'.i18n),
             subtitle: Text('Will be overwritten on start.'.i18n),
@@ -1346,7 +1376,6 @@ class _GeneralSettingsState extends State<GeneralSettings> {
                 settings.lastFMPassword = null;
                 await settings.save();
                 await GetIt.I<AudioPlayerHandler>().disableLastFM();
-                //await GetIt.I<AudioPlayerHandler>().customAction('disableLastFM', Map<String, dynamic>());
                 setState(() {});
                 Fluttertoast.showToast(msg: 'Logged out!'.i18n);
                 return;
@@ -1359,7 +1388,6 @@ class _GeneralSettingsState extends State<GeneralSettings> {
                 });
               }
             },
-            //enabled: false,
           ),
           ListTile(
             title: Text('Ignore interruptions'.i18n),
@@ -1392,9 +1420,6 @@ class _GeneralSettingsState extends State<GeneralSettings> {
                     builder: (context) {
                       return AlertDialog(
                         title: Text('Log out'.i18n),
-                        // There was no Incompatability, cookies just needed to be cleared...
-                        // content: Text('Due to plugin incompatibility, login using browser is unavailable without restart.'.i18n),
-                        // content: Text('Restart of app is required to properly log out!'.i18n),
                         content: Text('Are you sure you want to log out?'.i18n),
                         actions: <Widget>[
                           TextButton(
@@ -1402,29 +1427,12 @@ class _GeneralSettingsState extends State<GeneralSettings> {
                             onPressed: () => Navigator.of(context).pop(),
                           ),
                           TextButton(
-                            //child: Text('(ARL ONLY) Continue'.i18n),
                             child: Text('Continue'.i18n),
                             onPressed: () async {
                               await logOut();
                               if (context.mounted) Navigator.of(context).pop();
                             },
                           ),
-                          /* TextButton(
-                            child: Text('Log out & Exit'.i18n),
-                            onPressed: () async {
-                              try {
-                                GetIt.I<AudioPlayerHandler>().stop();
-                              } catch (e) {
-                                if (kDebugMode) {
-                                  print(e);
-                                }
-                              }
-                              await logOut();
-                              await DownloadManager.platform.invokeMethod('kill');
-                              //SystemNavigator.pop();
-                              Restart.restartApp();
-                            },
-                          )*/
                         ],
                       );
                     });
@@ -1774,30 +1782,6 @@ class _CreditsScreenState extends State<CreditsScreen> {
                 'Developer, tester, new icon & logo, some translations, ...'),
           ),
           const FreezerDivider(),
-          /*ListTile(
-            title: Text('Telegram Channel'.i18n),
-            subtitle: Text('To get latest releases'.i18n),
-            leading: const Icon(FontAwesome5.telegram, color: Color(0xFF27A2DF), size: 36.0),
-            onTap: () {
-              launchUrlString('https://t.me/joinchat/Se4zLEBvjS1NCiY9');
-            },
-          ),
-          ListTile(
-            title: Text('Telegram Group'.i18n),
-            subtitle: Text('Official chat'.i18n),
-            leading: const Icon(FontAwesome5.telegram, color: Colors.cyan, size: 36.0),
-            onTap: () {
-              launchUrlString('https://t.me/freezerandroid');
-            },
-          ),
-          ListTile(
-            title: Text('Discord'.i18n),
-            subtitle: Text('Official Discord server'.i18n),
-            leading: const Icon(FontAwesome5.discord, color: Color(0xff7289da), size: 36.0),
-            onTap: () {
-              launchUrlString('https://discord.gg/qwJpa3r4dQ');
-            },
-          ),*/
           ListTile(
             title: Text('Repository'.i18n),
             subtitle: Text('Source code, report issues there.'.i18n),
@@ -1842,7 +1826,6 @@ class _CreditsScreenState extends State<CreditsScreen> {
                       ],
                     );
                   });
-              // launchUrlString('https://paypal.me/exttex');
             },
           ),
           const FreezerDivider(),

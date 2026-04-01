@@ -119,8 +119,20 @@ const language_en_us = {
     'No results!': 'No results!',
     'Show all tracks': 'Show all tracks',
     'Show all playlists': 'Show all playlists',
+
+    // Settings / MFMS additions
     'Settings': 'Settings',
     'General': 'General',
+    'Audio Output': 'Audio Output',
+    'Normal': 'Normal',
+    'Surround': 'Surround',
+    'Surround Preset': 'Surround Preset',
+    'Pure Stereo': 'Pure Stereo',
+    'Room Fill': 'Room Fill',
+    'Wide Stage': 'Wide Stage',
+    'Vocal Focus': 'Vocal Focus',
+    'Immersive': 'Immersive',
+
     'Appearance': 'Appearance',
     'Quality': 'Quality',
     'Deezer': 'Deezer',
@@ -184,13 +196,10 @@ const language_en_us = {
     'Failed to download track! Please restart.':
         'Failed to download track! Please restart.',
 
-    //0.5.0 Strings:
     'Storage permission denied!': 'Storage permission denied!',
     'Failed': 'Failed',
     'Queued': 'Queued',
-    //Updated in 0.5.1 - used in context of download:
     'External': 'Storage',
-    //0.5.0
     'Restart failed downloads': 'Restart failed downloads',
     'Clear failed': 'Clear failed',
     'Download Settings': 'Download Settings',
@@ -200,9 +209,7 @@ const language_en_us = {
     'Not set': 'Not set',
     'Search or paste URL': 'Search or paste URL',
     'History': 'History',
-    //Updated 0.5.1
     'Download threads': 'Concurrent downloads',
-    //0.5.0
     'Lyrics unavailable, empty or failed to load!':
         'Lyrics unavailable, empty or failed to load!',
     'About': 'About',
@@ -216,58 +223,38 @@ const language_en_us = {
     'Update': 'Update',
     'Playlist updated!': 'Playlist updated!',
     'Downloads added!': 'Downloads added!',
-
-    //0.5.1 Strings:
     'Save cover file for every track': 'Save cover file for every track',
     'Download Log': 'Download Log',
     'Repository': 'Repository',
     'Source code, report issues there.': 'Source code, report issues there.',
-
-    //0.5.2 Strings:
     'Use system theme': 'Use system theme',
     'Light': 'Light',
-
-    //0.5.3 Strings:
     'Popularity': 'Popularity',
     'User': 'User',
     'Track count': 'Track count',
-    "If you want to use custom directory naming - use '/' as directory separator.":
-        "If you want to use custom directory naming - use '/' as directory separator.",
-
-    //0.5.4 Strings:
+    "If you want to use custom directory naming - use '' as directory separator.":
+        "If you want to use custom directory naming - use '' as directory separator.",
     'Share': 'Share',
     'Save album cover': 'Save album cover',
     'Warning': 'Warning',
-    'Using too many concurrent downloads on older/weaker devices might cause crashes!':
-        'Using too many concurrent downloads on older/weaker devices might cause crashes!',
-
-    //0.5.6 Strings:
+    'Using too many concurrent downloads on olderweaker devices might cause crashes!':
+        'Using too many concurrent downloads on olderweaker devices might cause crashes!',
     'Create .nomedia files': 'Create .nomedia files',
     'To prevent gallery being filled with album art':
         'To prevent gallery being filled with album art',
-
-    //0.5.7 Strings:
     'Sleep timer': 'Sleep timer',
     'Minutes:': 'Minutes:',
     'Hours:': 'Hours:',
     'Cancel current timer': 'Cancel current timer',
     'Current timer ends at': 'Current timer ends at',
-
-    //0.5.8 Strings:
     'Smart track list': 'Smart track list',
-
-    //0.6.0 Strings:
     'Shuffle': 'Shuffle',
     'Library shuffle': 'Library shuffle',
     'Ignore interruptions': 'Ignore interruptions',
     'Requires app restart to apply!': 'Requires app restart to apply!',
     'Ask before downloading': 'Ask before downloading',
-
-    //0.6.1 Strings:
     'Search history': 'Search history',
     'Clear search history': 'Clear search history',
-
-    //0.6.2 Strings:
     'LastFM': 'LastFM',
     'Login to enable scrobbling.': 'Login to enable scrobbling.',
     'Login to LastFM': 'Login to LastFM',
@@ -278,8 +265,6 @@ const language_en_us = {
     'Logged out!': 'Logged out!',
     'Lyrics': 'Lyrics',
     'Player gradient background': 'Player gradient background',
-
-    //0.6.3 Strings:
     'Updates': 'Updates',
     'You are running latest version!': 'You are running latest version!',
     'New update available!': 'New update available!',
@@ -289,8 +274,6 @@ const language_en_us = {
     'Update to latest version in the settings.':
         'Update to latest version in the settings.',
     'Release date': 'Release date',
-
-    //0.6.4 Strings:
     'Shows': 'Shows',
     'Charts': 'Charts',
     'Browse': 'Browse',
@@ -300,14 +283,10 @@ const language_en_us = {
     'Date added': 'Date added',
     'Discord': 'Discord',
     'Official Discord server': 'Official Discord server',
-
-    //0.6.6
     'Restart of app is required to properly log out!':
         'Restart of app is required to properly log out!',
     'Artist separator': 'Artist separator',
     'Singleton naming': 'Standalone tracks filename',
-
-    //0.6.7
     'Keep the screen on': 'Keep the screen on',
     'Wakelock enabled!': 'Wakelock enabled!',
     'Wakelock disabled!': 'Wakelock disabled!',
@@ -317,13 +296,9 @@ const language_en_us = {
     'Album cover resolution': 'Album cover resolution',
     "WARNING: Resolutions above 1200 aren't officially supported":
         "WARNING: Resolutions above 1200 aren't officially supported",
-
-    //0.6.8:
     'Album removed from library!': 'Album removed from library!',
     'Remove offline': 'Remove offline',
     'Playlist removed from library!': 'Playlist removed from library!',
-
-    //0.6.9:
     'Blur player background': 'Blur player background',
     'Might have impact on performance': 'Might have impact on performance',
     'Font': 'Font',
@@ -341,7 +316,7 @@ const language_en_us = {
     'Track number': 'Track number',
     'Disc number': 'Disc number',
     'Album artist': 'Album artist',
-    'Date/Year': 'Date/Year',
+    'DateYear': 'DateYear',
     'Label': 'Label',
     'ISRC': 'ISRC',
     'UPC': 'UPC',
@@ -351,8 +326,6 @@ const language_en_us = {
     'Genre': 'Genre',
     'Contributors': 'Contributors',
     'Album art': 'Album art',
-
-    //0.6.10
     'Deezer is unavailable in your country, ReFreezer might not work properly. Please use a VPN':
         'Deezer is unavailable in your country, ReFreezer might not work properly. Please use a VPN',
     'Deezer is unavailable': 'Deezer is unavailable',
@@ -377,8 +350,8 @@ const language_en_us = {
     'Spotify Importer v2': 'Spotify Importer v2',
     'This importer requires Spotify Client ID and Client Secret. To obtain them:':
         'This importer requires Spotify Client ID and Client Secret. To obtain them:',
-    '1. Go to: developer.spotify.com/dashboard and create an app.':
-        '1. Go to: developer.spotify.com/dashboard and create an app.',
+    '1. Go to: developer.spotify.comdashboard and create an app.':
+        '1. Go to: developer.spotify.comdashboard and create an app.',
     'Open in Browser': 'Open in Browser',
     '2. In the app you just created go to settings, and set the Redirect URL to: ':
         '2. In the app you just created go to settings, and set the Redirect URL to: ',
@@ -390,73 +363,17 @@ const language_en_us = {
     'Import playlists by URL': 'Import playlists by URL',
     'URL': 'URL',
     'Options': 'Options',
-    'Invalid/Unsupported URL': 'Invalid/Unsupported URL',
+    'InvalidUnsupported URL': 'InvalidUnsupported URL',
     'Please wait...': 'Please wait...',
     'Login using email': 'Login using email',
-
-    //0.6.11, offline text OCD lol
     'Track removed from offline!': 'Track removed from offline!',
     'Removed album from offline!': 'Removed album from offline!',
     'Playlist removed from offline!': 'Playlist removed from offline!',
-
-    //0.6.11 - a11y by dangou
     'Repeat': 'Repeat',
     'Repeat one': 'Repeat one',
     'Repeat off': 'Repeat off',
     'Love': 'Love',
     'Unlove': 'Unlove',
     'Dislike': 'Dislike',
-    'Close': 'Close',
-    'Sort playlist': 'Sort playlist',
-    'Sort ascending': 'Sort ascending',
-    'Sort descending': 'Sort descending',
-    'Stop': 'Stop',
-    'Start': 'Start',
-    'Clear all': 'Clear all',
-    'Play previous': 'Play previous',
-    'Play': 'Play',
-    'Pause': 'Pause',
-    'Remove': 'Remove',
-    'Seekbar': 'Seekbar',
-    'Singles': 'Singles',
-    'Featured': 'Featured',
-    'Fans': 'Fans',
-    'Duration': 'Duration',
-    'Sort': 'Sort',
-
-    //0.6.12
-    'Your ARL might be expired, try logging out and logging back in using new ARL or browser.':
-        'Your ARL might be expired, try logging out and logging back in using new ARL or browser.',
-
-    //0.7.05
-    'The original freezer development team':
-        'The original freezer development team',
-    'Donate': 'Donate',
-    'You should rather support your favorite artists, instead of this app!':
-        'You should rather support your favorite artists, instead of this app!',
-    'No really, go support your favorite artists instead ;)':
-        'No really, go support your favorite artists instead ;)',
-    'Storage permission is required to download content.\nPlease open settings and grant storage permission to ReFreezer.':
-        'Storage permission is required to download content.\nPlease open settings and grant storage permission to ReFreezer.',
-    'Open system settings': 'Open system settings',
-    'Application Log': 'Application Log',
-    'Are you sure you want to log out?': 'Are you sure you want to log out?',
-
-    // 0.7.13
-    'Download failed!': 'Download failed!',
-
-    // 0.7.14
-    'Permission denied, download canceled!':
-        'Permission denied, download canceled!',
-    'Crowdin': 'Crowdin',
-    'Help translating this app on Crowdin!':
-        'Help translating this app on Crowdin!',
-
-    // 0.7.15
-    'Allow screen to turn off': 'Allow screen to turn off',
-
-    // 0.7.16
-    'Selecting a new icon will exit the app to apply the change!':
-        'Selecting a new icon will exit the app to apply the change!',
   }
 };
