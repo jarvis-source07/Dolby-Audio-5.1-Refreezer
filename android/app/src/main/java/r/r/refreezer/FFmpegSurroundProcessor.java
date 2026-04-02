@@ -19,7 +19,7 @@ import java.util.Locale;
  *
  * Design goals:
  * - AC3-only output in the new pipeline
- * - Preserve original stereo character
+ * - Preserve original stereo character as much as possible
  * - Avoid fake ambience/reverb
  * - Rear channels are derived support channels, not cinematic gimmicks
  *
@@ -37,6 +37,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
      * Kept only for compatibility with old constructor usage.
      * Not required by FFmpegKit execution path.
      */
+    @SuppressWarnings("unused")
     private final String ffmpegBinaryPath;
 
     public FFmpegSurroundProcessor(String ffmpegBinaryPath) {
@@ -331,6 +332,13 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
     /**
      * Build music-first FFmpeg filter graph.
+     *
+     * Preset philosophy:
+     * - RAW_CLONE: fronts untouched, rears exact stereo copies, no center/LFE/delay/filter
+     * - ROOM_FILL_MATRIX: flagship natural room-fill, front preserved, rear subtle/supportive
+     * - WIDE_STAGE: wider front image, very subtle rear support
+     * - VOCAL_ANCHOR: gentle center support, restrained rears
+     * - IMMERSIVE_MUSIC: larger room feel but still music-first
      */
     protected String buildFilterComplex(Preset preset) {
         FilterProfile profile = FilterProfile.fromPreset(preset);
@@ -387,11 +395,11 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append("[lfes]pan=mono|c0=0*c0+0*c1[lfe];");
         }
 
-        // Rears: ±S with delay and band-limiting
+        // Rears: ±S with optional delay and band-limiting
+        // SL = +S = +aL - aR
         sb.append("[sls]pan=mono|c0=")
-                .append(f(rearCoeff)).append("*c0")
-                .append(rearCoeff >= 0 ? "-" : "+")
-                .append(f(Math.abs(rearCoeff))).append("*c1");
+                .append(f(rearCoeff)).append("*c0-")
+                .append(f(rearCoeff)).append("*c1");
 
         if (profile.rearHighpassHz > 0) {
             sb.append(",highpass=f=").append(profile.rearHighpassHz);
@@ -400,10 +408,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append(",lowpass=f=").append(profile.rearLowpassHz);
         }
         if (profile.rearDelayMs > 0) {
+            // stream is already mono here; single delay value is valid
             sb.append(",adelay=").append(profile.rearDelayMs);
         }
         sb.append("[sl];");
 
+        // SR = -S = -aL + aR
         sb.append("[srs]pan=mono|c0=")
                 .append(f(-rearCoeff)).append("*c0+")
                 .append(f(rearCoeff)).append("*c1");
@@ -415,6 +425,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append(",lowpass=f=").append(profile.rearLowpassHz);
         }
         if (profile.rearDelayMs > 0) {
+            // stream is already mono here; single delay value is valid
             sb.append(",adelay=").append(profile.rearDelayMs);
         }
         sb.append("[sr];");
@@ -564,11 +575,11 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     /**
      * FilterProfile holds the effective music-first preset tuning.
      *
-     * This is intentionally conservative:
-     * - fronts stay dominant
-     * - center stays subtle
-     * - rears are derived support channels
-     * - no fake ambience/reverb
+     * Audiophile / Premium V2 tuning:
+     * - Fronts preserved as much as possible
+     * - RAW_CLONE = exact stereo clone in rears
+     * - Matrix presets are intentionally subtle and musical
+     * - No fake ambience/reverb
      */
     private static class FilterProfile {
         final boolean rawClone;
@@ -627,90 +638,96 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
             switch (canonical) {
                 case RAW_CLONE:
+                    // Pure Stereo:
+                    // Front untouched
+                    // Rears exact stereo clones
+                    // No center, no LFE, no delay, no filters
                     return new FilterProfile(
                             true,
                             1.000000, 0.000000,
                             0.000000, 1.000000,
-                            0.0,
-                            0.0,
-                            0.0,
+                            0.00,
+                            0.00,
+                            0.00,
                             0,
                             0,
                             0,
                             80,
-                            0.92,
-                            0.92
+                            1.000000,
+                            1.000000
                     );
 
                 case WIDE_STAGE:
-                    // Front widen:
-                    // L' = M + 1.15S
-                    // R' = M - 1.15S
-                    // Expanded to L/R coefficients:
-                    // L' = 0.707*(1+1.15)L + 0.707*(1-1.15)R
-                    // R' = 0.707*(1-1.15)L + 0.707*(1+1.15)R
+                    // Premium V2:
+                    // subtle widening, very light rear support, no center/LFE
                     return new FilterProfile(
                             false,
-                            0.760140, -0.106066,
-                            -0.106066, 0.760140,
-                            0.0,
-                            0.12,
-                            0.0,
-                            6,
-                            150,
-                            7000,
+                            0.98, -0.04,
+                            -0.04, 0.98,
+                            0.00,
+                            0.08,
+                            0.00,
+                            5,
+                            160,
+                            6800,
                             80,
-                            0.0,
-                            0.0
+                            0.00,
+                            0.00
                     );
 
                 case VOCAL_ANCHOR:
+                    // Premium V2:
+                    // front preserved, gentle center, restrained rears
                     return new FilterProfile(
                             false,
-                            0.92, 0.00,
-                            0.00, 0.92,
-                            0.28,
+                            1.00, 0.00,
+                            0.00, 1.00,
                             0.18,
-                            0.15,
-                            8,
-                            120,
-                            7500,
+                            0.12,
+                            0.08,
+                            6,
+                            140,
+                            7000,
                             80,
-                            0.0,
-                            0.0
+                            0.00,
+                            0.00
                     );
 
                 case IMMERSIVE_MUSIC:
+                    // Premium V2:
+                    // larger room feel, still music-first and controlled
                     return new FilterProfile(
                             false,
-                            0.95, 0.00,
-                            0.00, 0.95,
-                            0.18,
-                            0.45,
-                            0.25,
-                            15,
-                            110,
-                            9000,
+                            0.99, 0.00,
+                            0.00, 0.99,
+                            0.12,
+                            0.34,
+                            0.14,
+                            12,
+                            120,
+                            8500,
                             80,
-                            0.0,
-                            0.0
+                            0.00,
+                            0.00
                     );
 
                 case ROOM_FILL_MATRIX:
                 default:
+                    // Premium V2 flagship:
+                    // fronts preserved, subtle center, tasteful rear support
                     return new FilterProfile(
                             false,
-                            0.96, 0.00,
-                            0.00, 0.96,
-                            0.15,
-                            0.35,
-                            0.20,
-                            12,
-                            120,
-                            8000,
+                            1.00, 0.00,
+                            0.00, 1.00,
+                            0.10,
+                            0.26,
+                            0.10,
+                            9,
+                            140,
+                            7200,
                             80,
-                            0.0,
-                            0.0
+                            0.00,
+                            0.00
                     );
             }
         }
