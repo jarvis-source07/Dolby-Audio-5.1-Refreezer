@@ -15,13 +15,20 @@ import java.util.Locale;
  * FFmpegSurroundProcessor
  *
  * Music-first FFmpegKit implementation:
- * Stereo input -> matrix-derived 5.1 -> AC3 encode
+ * Stereo input -> matrix-derived multi-channel -> AC3 encode
  *
  * Design goals:
- * - AC3-only output in the new pipeline
+ * - AC3-only output in the current pipeline
  * - Preserve original stereo character as much as possible
  * - Avoid fake ambience/reverb
- * - Rear channels are derived support channels, not cinematic gimmicks
+ * - Rear channels are support channels, not cinematic gimmicks
+ *
+ * Preset routing strategy:
+ * - RAW_CLONE        -> QUAD / 4.0
+ * - ROOM_FILL_MATRIX -> QUAD / 4.0
+ * - WIDE_STAGE       -> QUAD / 4.0
+ * - IMMERSIVE_MUSIC  -> QUAD / 4.0
+ * - VOCAL_ANCHOR     -> 5.0 (center allowed only here)
  *
  * Notes:
  * - Uses FFmpegKit bundled through local AAR
@@ -190,7 +197,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     }
 
     /**
-     * Stereo -> music-first 5.1 -> AC3
+     * Stereo -> music-first multi-channel -> AC3
      */
     @Override
     protected Result renderToAc3Master(Config config, File inputFile, File ac3OutputFile) {
@@ -275,14 +282,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
     /**
      * Builds ffmpeg command for:
-     * stereo -> matrix-derived 5.1 -> AC3
-     *
-     * Uses -filter_complex rather than simple pan-only routing so we can:
-     * - derive rear side information
-     * - band-limit rears
-     * - add precise rear delay
-     * - keep center subtle
-     * - keep optional LFE filtered only
+     * stereo -> music-first multi-channel -> AC3
      */
     protected List<String> buildStereoToAc3Command(
             Config config,
@@ -291,8 +291,9 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     ) {
         List<String> cmd = new ArrayList<>();
 
+        FilterProfile profile = FilterProfile.fromPreset(config.preset);
+
         int sampleRate = config.sampleRateHz > 0 ? config.sampleRateHz : 48000;
-        int channels = config.outputChannels > 0 ? config.outputChannels : 6;
         int bitrateKbps = config.bitrateKbps > 0 ? config.bitrateKbps : 448;
 
         cmd.add("-y");
@@ -314,10 +315,10 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         cmd.add(String.valueOf(sampleRate));
 
         cmd.add("-ac");
-        cmd.add(String.valueOf(channels));
+        cmd.add(String.valueOf(profile.outputChannelCount));
 
         cmd.add("-channel_layout");
-        cmd.add("5.1");
+        cmd.add(profile.outputChannelLayout);
 
         cmd.add("-c:a");
         cmd.add("ac3");
@@ -333,12 +334,9 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     /**
      * Build music-first FFmpeg filter graph.
      *
-     * Preset philosophy:
-     * - RAW_CLONE: fronts untouched, rears exact stereo copies, no center/LFE/delay/filter
-     * - ROOM_FILL_MATRIX: flagship natural room-fill, front preserved, rear subtle/supportive
-     * - WIDE_STAGE: wider front image, very subtle rear support
-     * - VOCAL_ANCHOR: gentle center support, restrained rears
-     * - IMMERSIVE_MUSIC: larger room feel but still music-first
+     * Layout policy:
+     * - RAW_CLONE / ROOM_FILL / WIDE / IMMERSIVE = QUAD
+     * - VOCAL_ANCHOR = 5.0
      */
     protected String buildFilterComplex(Preset preset) {
         FilterProfile profile = FilterProfile.fromPreset(preset);
@@ -350,21 +348,72 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
         // Side rears use S = 0.707(L-R)
         double rearCoeff = profile.rearGain * INV_SQRT2;
 
-        // Raw clone special-case: direct stereo copy in rears
+        // RAW_CLONE special case -> QUAD / 4.0
         if (profile.rawClone) {
-            return "[0:a]aformat=channel_layouts=stereo,asplit=6[fls][frs][fcs][lfes][sls][srs];" +
+            return "[0:a]aformat=channel_layouts=stereo,asplit=4[fls][frs][sls][srs];" +
                     "[fls]pan=mono|c0=" + f(profile.frontLeftL) + "*c0+" + f(profile.frontLeftR) + "*c1[fl];" +
                     "[frs]pan=mono|c0=" + f(profile.frontRightL) + "*c0+" + f(profile.frontRightR) + "*c1[fr];" +
-                    "[fcs]pan=mono|c0=0*c0+0*c1[fc];" +
-                    "[lfes]pan=mono|c0=0*c0+0*c1[lfe];" +
                     "[sls]pan=mono|c0=" + f(profile.rearCloneLeftGain) + "*c0[sl];" +
                     "[srs]pan=mono|c0=" + f(profile.rearCloneRightGain) + "*c1[sr];" +
-                    "[fl][fr][fc][lfe][sl][sr]join=inputs=6:channel_layout=5.1[aout]";
+                    "[fl][fr][sl][sr]join=inputs=4:channel_layout=quad[aout]";
         }
 
+        // QUAD presets: no center, no LFE
+        if (profile.outputChannelLayout.equals("quad")) {
+            StringBuilder sb = new StringBuilder();
+
+            sb.append("[0:a]aformat=channel_layouts=stereo,asplit=4[fls][frs][sls][srs];");
+
+            // Fronts
+            sb.append("[fls]pan=mono|c0=")
+                    .append(f(profile.frontLeftL)).append("*c0+")
+                    .append(f(profile.frontLeftR)).append("*c1[fl];");
+
+            sb.append("[frs]pan=mono|c0=")
+                    .append(f(profile.frontRightL)).append("*c0+")
+                    .append(f(profile.frontRightR)).append("*c1[fr];");
+
+            // Rear left = +S
+            sb.append("[sls]pan=mono|c0=")
+                    .append(f(rearCoeff)).append("*c0-")
+                    .append(f(rearCoeff)).append("*c1");
+
+            if (profile.rearHighpassHz > 0) {
+                sb.append(",highpass=f=").append(profile.rearHighpassHz);
+            }
+            if (profile.rearLowpassHz > 0) {
+                sb.append(",lowpass=f=").append(profile.rearLowpassHz);
+            }
+            if (profile.rearDelayMs > 0) {
+                sb.append(",adelay=").append(profile.rearDelayMs);
+            }
+            sb.append("[sl];");
+
+            // Rear right = -S
+            sb.append("[srs]pan=mono|c0=")
+                    .append(f(-rearCoeff)).append("*c0+")
+                    .append(f(rearCoeff)).append("*c1");
+
+            if (profile.rearHighpassHz > 0) {
+                sb.append(",highpass=f=").append(profile.rearHighpassHz);
+            }
+            if (profile.rearLowpassHz > 0) {
+                sb.append(",lowpass=f=").append(profile.rearLowpassHz);
+            }
+            if (profile.rearDelayMs > 0) {
+                sb.append(",adelay=").append(profile.rearDelayMs);
+            }
+            sb.append("[sr];");
+
+            sb.append("[fl][fr][sl][sr]join=inputs=4:channel_layout=quad[aout]");
+
+            return sb.toString();
+        }
+
+        // 5.0 preset path -> VOCAL_ANCHOR only
         StringBuilder sb = new StringBuilder();
 
-        sb.append("[0:a]aformat=channel_layouts=stereo,asplit=6[fls][frs][fcs][lfes][sls][srs];");
+        sb.append("[0:a]aformat=channel_layouts=stereo,asplit=5[fls][frs][fcs][sls][srs];");
 
         // Fronts
         sb.append("[fls]pan=mono|c0=")
@@ -375,7 +424,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                 .append(f(profile.frontRightL)).append("*c0+")
                 .append(f(profile.frontRightR)).append("*c1[fr];");
 
-        // Center (subtle and optional)
+        // Center
         if (profile.centerGain > 0.0001d) {
             sb.append("[fcs]pan=mono|c0=")
                     .append(f(centerCoeff)).append("*c0+")
@@ -384,19 +433,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append("[fcs]pan=mono|c0=0*c0+0*c1[fc];");
         }
 
-        // LFE (filtered only, optional)
-        if (profile.lfeGain > 0.0001d) {
-            sb.append("[lfes]pan=mono|c0=")
-                    .append(f(lfeCoeff)).append("*c0+")
-                    .append(f(lfeCoeff)).append("*c1,")
-                    .append("lowpass=f=").append(profile.lfeLowpassHz)
-                    .append("[lfe];");
-        } else {
-            sb.append("[lfes]pan=mono|c0=0*c0+0*c1[lfe];");
-        }
-
-        // Rears: ±S with optional delay and band-limiting
-        // SL = +S = +aL - aR
+        // Rear left = +S
         sb.append("[sls]pan=mono|c0=")
                 .append(f(rearCoeff)).append("*c0-")
                 .append(f(rearCoeff)).append("*c1");
@@ -408,12 +445,11 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append(",lowpass=f=").append(profile.rearLowpassHz);
         }
         if (profile.rearDelayMs > 0) {
-            // stream is already mono here; single delay value is valid
             sb.append(",adelay=").append(profile.rearDelayMs);
         }
         sb.append("[sl];");
 
-        // SR = -S = -aL + aR
+        // Rear right = -S
         sb.append("[srs]pan=mono|c0=")
                 .append(f(-rearCoeff)).append("*c0+")
                 .append(f(rearCoeff)).append("*c1");
@@ -425,12 +461,11 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
             sb.append(",lowpass=f=").append(profile.rearLowpassHz);
         }
         if (profile.rearDelayMs > 0) {
-            // stream is already mono here; single delay value is valid
             sb.append(",adelay=").append(profile.rearDelayMs);
         }
         sb.append("[sr];");
 
-        sb.append("[fl][fr][fc][lfe][sl][sr]join=inputs=6:channel_layout=5.1[aout]");
+        sb.append("[fl][fr][fc][sl][sr]join=inputs=5:channel_layout=5.0[aout]");
 
         return sb.toString();
     }
@@ -575,14 +610,25 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
     /**
      * FilterProfile holds the effective music-first preset tuning.
      *
-     * Audiophile / Premium V2 tuning:
+     * QUAD policy:
+     * - raw_clone        -> quad
+     * - room_fill_matrix -> quad
+     * - wide_stage       -> quad
+     * - immersive_music  -> quad
+     *
+     * 5.0 policy:
+     * - vocal_anchor     -> 5.0
+     *
+     * Philosophy:
      * - Fronts preserved as much as possible
-     * - RAW_CLONE = exact stereo clone in rears
-     * - Matrix presets are intentionally subtle and musical
      * - No fake ambience/reverb
+     * - Center only where intentionally desired
      */
     private static class FilterProfile {
         final boolean rawClone;
+
+        final String outputChannelLayout;
+        final int outputChannelCount;
 
         final double frontLeftL;
         final double frontLeftR;
@@ -591,7 +637,7 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
         final double centerGain;      // multiplier applied to M
         final double rearGain;        // multiplier applied to S
-        final double lfeGain;         // multiplier applied to M (after LPF)
+        final double lfeGain;         // retained for compatibility, not used in QUAD/5.0 routes here
 
         final int rearDelayMs;
         final int rearHighpassHz;
@@ -603,6 +649,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
         private FilterProfile(
                 boolean rawClone,
+                String outputChannelLayout,
+                int outputChannelCount,
                 double frontLeftL,
                 double frontLeftR,
                 double frontRightL,
@@ -618,6 +666,8 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                 double rearCloneRightGain
         ) {
             this.rawClone = rawClone;
+            this.outputChannelLayout = outputChannelLayout;
+            this.outputChannelCount = outputChannelCount;
             this.frontLeftL = frontLeftL;
             this.frontLeftR = frontLeftR;
             this.frontRightL = frontRightL;
@@ -640,10 +690,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                 case RAW_CLONE:
                     // Pure Stereo:
                     // Front untouched
-                    // Rears exact stereo clones
-                    // No center, no LFE, no delay, no filters
+                    // Rear exact same-time stereo clones
+                    // QUAD / 4.0
                     return new FilterProfile(
                             true,
+                            "quad",
+                            4,
                             1.000000, 0.000000,
                             0.000000, 1.000000,
                             0.00,
@@ -658,10 +710,12 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     );
 
                 case WIDE_STAGE:
-                    // Premium V2:
-                    // subtle widening, very light rear support, no center/LFE
+                    // QUAD / 4.0
+                    // Slight width, very light rear support, no center
                     return new FilterProfile(
                             false,
+                            "quad",
+                            4,
                             0.98, -0.04,
                             -0.04, 0.98,
                             0.00,
@@ -676,15 +730,17 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     );
 
                 case VOCAL_ANCHOR:
-                    // Premium V2:
-                    // front preserved, gentle center, restrained rears
+                    // 5.0
+                    // Only preset that intentionally uses center
                     return new FilterProfile(
                             false,
+                            "5.0",
+                            5,
                             1.00, 0.00,
                             0.00, 1.00,
                             0.18,
                             0.12,
-                            0.08,
+                            0.00,
                             6,
                             140,
                             7000,
@@ -694,15 +750,17 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
                     );
 
                 case IMMERSIVE_MUSIC:
-                    // Premium V2:
-                    // larger room feel, still music-first and controlled
+                    // QUAD / 4.0
+                    // Bigger room feel, still no center to keep music-first front image
                     return new FilterProfile(
                             false,
+                            "quad",
+                            4,
                             0.99, 0.00,
                             0.00, 0.99,
-                            0.12,
+                            0.00,
                             0.34,
-                            0.14,
+                            0.00,
                             12,
                             120,
                             8500,
@@ -713,15 +771,17 @@ public class FFmpegSurroundProcessor extends SurroundProcessor {
 
                 case ROOM_FILL_MATRIX:
                 default:
-                    // Premium V2 flagship:
-                    // fronts preserved, subtle center, tasteful rear support
+                    // QUAD / 4.0 flagship
+                    // Front preserved, subtle rear support, no center
                     return new FilterProfile(
                             false,
+                            "quad",
+                            4,
                             1.00, 0.00,
                             0.00, 1.00,
-                            0.10,
+                            0.00,
                             0.26,
-                            0.10,
+                            0.00,
                             9,
                             140,
                             7200,
